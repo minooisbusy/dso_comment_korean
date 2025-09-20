@@ -389,7 +389,7 @@ int main( int argc, char** argv )
 	}
 
 
-
+	// Define Full System Variable
 	FullSystem* fullSystem = new FullSystem();
 	fullSystem->setGammaFunction(reader->getPhotometricGamma());
 	fullSystem->linearizeOperation = (playbackSpeed==0);
@@ -399,8 +399,8 @@ int main( int argc, char** argv )
 
 
 
-
-    IOWrap::PangolinDSOViewer* viewer = 0;
+	// ~Initialize Pangolin~
+    IOWrap::PangolinDSOViewer* viewer = 0; 
 	if(!disableAllDisplay)
     {
         viewer = new IOWrap::PangolinDSOViewer(wG[0],hG[0], false);
@@ -436,7 +436,7 @@ int main( int argc, char** argv )
 
 
         std::vector<ImageAndExposure*> preloadedImages;
-        if(preload)
+        if(preload) // Ingnore. I don't care this paragraph
         {
             printf("LOADING ALL IMAGES!\n");
             for(int ii=0;ii<(int)idsToPlay.size(); ii++)
@@ -531,7 +531,7 @@ int main( int argc, char** argv )
         gettimeofday(&tv_end, NULL);
 
 
-        fullSystem->printResult("result.txt");
+        fullSystem->printResult("/workspace/dso/TUM-MONO/results/originals/sequence_01.txt");
 
 
         int numFramesProcessed = abs(idsToPlay[0]-idsToPlay.back());

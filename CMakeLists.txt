@@ -5,8 +5,13 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 #set(CMAKE_VERBOSE_MAKEFILE ON)
 
 
-set(BUILD_TYPE Release)
+#set(BUILD_TYPE Release)
 #set(BUILD_TYPE RelWithDebInfo)
+
+# My setting by Minwoo Shin 24/06/10 15:35
+set(BUILD_TYPE Debug)
+set(CMAKE_CXX_COMPILER clang++)
+set(CMAKE_C_COMPILER clang)
 
 set(EXECUTABLE_OUTPUT_PATH bin)
 set(LIBRARY_OUTPUT_PATH lib)

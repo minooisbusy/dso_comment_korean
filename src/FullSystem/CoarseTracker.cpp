@@ -442,7 +442,7 @@ Vec6 CoarseTracker::calcRes(int lvl, const SE3 &refToNew, AffLight aff_g2l, floa
 			sumSquaredShiftRT += (Ku3-x)*(Ku3-x) + (Kv3-y)*(Kv3-y);
 			sumSquaredShiftNum+=2;
 		}
-
+		// boundary filtering for bilinear interpolation
 		if(!(Ku > 2 && Kv > 2 && Ku < wl-3 && Kv < hl-3 && new_idepth > 0)) continue;
 
 
@@ -594,8 +594,8 @@ bool CoarseTracker::trackNewestCoarse(
 		for(int iteration=0; iteration < maxIterations[lvl]; iteration++)
 		{
 			Mat88 Hl = H;
-			for(int i=0;i<8;i++) Hl(i,i) *= (1+lambda);
-			Vec8 inc = Hl.ldlt().solve(-b);
+			for(int i=0;i<8;i++) Hl(i,i) *= (1+lambda); // add Damping factor diagonal to Hessian
+			Vec8 inc = Hl.ldlt().solve(-b); // While Hl is symmetric matrix, We use LDL factorization to solve system
 
 			if(setting_affineOptModeA < 0 && setting_affineOptModeB < 0)	// fix a, b
 			{

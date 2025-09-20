@@ -197,13 +197,14 @@ struct FrameHessian
 		this->state_scaled = state_scaled;
 		state.segment<3>(0) = SCALE_XI_TRANS_INVERSE * state_scaled.segment<3>(0);
 		state.segment<3>(3) = SCALE_XI_ROT_INVERSE * state_scaled.segment<3>(3);
-		state[6] = SCALE_A_INVERSE * state_scaled[6];
-		state[7] = SCALE_B_INVERSE * state_scaled[7];
+		state[6] = SCALE_A_INVERSE * state_scaled[6];// makeKeyFrame에서는
+		state[7] = SCALE_B_INVERSE * state_scaled[7];// 이 두 개만 들어가겠지
 		state[8] = SCALE_A_INVERSE * state_scaled[8];
 		state[9] = SCALE_B_INVERSE * state_scaled[9];
-
-		PRE_worldToCam = SE3::exp(w2c_leftEps()) * get_worldToCam_evalPT();
+		// 만약 w2c_leftEps가 0-vector이면, 항등.
+		PRE_worldToCam = SE3::exp(w2c_leftEps()) * get_worldToCam_evalPT(); 
 		PRE_camToWorld = PRE_worldToCam.inverse();
+		// 여기까지 state 변수는 6,7만 값이 있음. 나머지는 0값.
 		//setCurrentNullspace();
 	};
 	inline void setEvalPT(const SE3 &worldToCam_evalPT, const Vec10 &state)
@@ -216,14 +217,15 @@ struct FrameHessian
 
 
 
+	// WorldToCam_evalPT를 설정하여 선형화 지점 설정
 	inline void setEvalPT_scaled(const SE3 &worldToCam_evalPT, const AffLight &aff_g2l)
 	{
 		Vec10 initial_state = Vec10::Zero();
 		initial_state[6] = aff_g2l.a;
 		initial_state[7] = aff_g2l.b;
 		this->worldToCam_evalPT = worldToCam_evalPT;
-		setStateScaled(initial_state);
-		setStateZero(this->get_state());
+		setStateScaled(initial_state); // Scale을 벗겨냄
+		setStateZero(this->get_state()); // state의 각 값의 nullspace column을 구한다.
 	};
 
 	void release();

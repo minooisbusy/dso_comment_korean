@@ -114,7 +114,7 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 	SE3 refToNew_current = thisToNext;
 	AffLight refToNew_aff_current = thisToNext_aff;
 
-	if(firstFrame->ab_exposure>0 && newFrame->ab_exposure>0)
+	if(firstFrame->ab_exposure>0 && newFrame->ab_exposure>0)// If ab_exposure are presented.
 		refToNew_aff_current = AffLight(logf(newFrame->ab_exposure /  firstFrame->ab_exposure),0); // coarse approximation.
 
 
@@ -125,12 +125,12 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 
 
 		if(lvl<pyrLevelsUsed-1)
-			propagateDown(lvl+1);
+			propagateDown(lvl+1); 
 
-		Mat88f H,Hsc; Vec8f b,bsc;
-		resetPoints(lvl);
+		Mat88f H,Hsc; Vec8f b,bsc; // sc means `s`hur `c`omplement!
+		resetPoints(lvl); // 만약 point의 isGood이 false 인 경우 최상층 초기화 진행
 		Vec3f resOld = calcResAndGS(lvl, H, b, Hsc, bsc, refToNew_current, refToNew_aff_current, false);
-		applyStep(lvl);
+		applyStep(lvl); // energy만 업데이트 됨(나머지는 변한게 없음)
 
 		float lambda = 0.1;
 		float eps = 1e-4;
@@ -155,8 +155,8 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 		while(true)
 		{
 			Mat88f Hl = H;
-			for(int i=0;i<8;i++) Hl(i,i) *= (1+lambda);
-			Hl -= Hsc*(1/(1+lambda));
+			for(int i=0;i<8;i++) Hl(i,i) *= (1+lambda); // (H+(1+lambda)*diag(H))
+			Hl -= Hsc*(1/(1+lambda)); // H + mu*diag(H) - Hsc*(1/(1+lambda))
 			Vec8f bl = b - bsc*(1/(1+lambda));
 
 			Hl = wM * Hl * wM * (0.01f/(w[lvl]*h[lvl]));
@@ -211,7 +211,7 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 			{
 
 				if(resNew[1] == alphaK*numPoints[lvl])
-					snapped = true;
+					snapped = true; // If points average movement is further than the threshold(`alphaK`), i.e. It is appropriate Initial frames pair.
 				H = H_new;
 				b = b_new;
 				Hsc = Hsc_new;
@@ -219,8 +219,8 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 				resOld = resNew;
 				refToNew_aff_current = refToNew_aff_new;
 				refToNew_current = refToNew_new;
-				applyStep(lvl);
-				optReg(lvl);
+				applyStep(lvl); // update point information from initial(*) to estimated (*_new)
+				optReg(lvl); // Regress iR with neighbors
 				lambda *= 0.5;
 				fails=0;
 				if(lambda < 0.0001) lambda = 0.0001;
@@ -261,7 +261,7 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 
 
 	frameID++;
-	if(!snapped) snappedAt=0;
+	if(!snapped) snappedAt=0; // 0 means Not Snapped YET.
 
 	if(snapped && snappedAt==0)
 		snappedAt = frameID;
@@ -367,7 +367,7 @@ Vec3f CoarseInitializer::calcResAndGS(
 			continue;
 		}
 
-        VecNRf dp0;
+        VecNRf dp0; // dimension == MAX_RES_PER_POINT => 8
         VecNRf dp1;
         VecNRf dp2;
         VecNRf dp3;
@@ -389,8 +389,8 @@ Vec3f CoarseInitializer::calcResAndGS(
 
 
 			Vec3f pt = RKi * Vec3f(point->u+dx, point->v+dy, 1) + t*point->idepth_new;
-			float u = pt[0] / pt[2];
-			float v = pt[1] / pt[2];
+			float u = pt[0] / pt[2]; // u_2'=rho * X
+			float v = pt[1] / pt[2]; // v_2'=rho * Y
 			float Ku = fxl * u + cxl;
 			float Kv = fyl * v + cyl;
 			float new_idepth = point->idepth_new/pt[2];
@@ -420,38 +420,45 @@ Vec3f CoarseInitializer::calcResAndGS(
 
 
 
-
-			float dxdd = (t[0]-t[2]*u)/pt[2];
+			float dxdd = (t[0]-t[2]*u)/pt[2]; // (t_X-t_Z*u)/Z_newly_pred
 			float dydd = (t[1]-t[2]*v)/pt[2];
 
 			if(hw < 1) hw = sqrtf(hw);
 			float dxInterp = hw*hitColor[1]*fxl;
 			float dyInterp = hw*hitColor[2]*fyl;
-			dp0[idx] = new_idepth*dxInterp;
-			dp1[idx] = new_idepth*dyInterp;
-			dp2[idx] = -new_idepth*(u*dxInterp + v*dyInterp);
-			dp3[idx] = -u*v*dxInterp - (1+v*v)*dyInterp;
-			dp4[idx] = (1+u*u)*dxInterp + u*v*dyInterp;
-			dp5[idx] = -v*dxInterp + u*dyInterp;
-			dp6[idx] = - hw*r2new_aff[0] * rlR;
-			dp7[idx] = - hw*1;
-			dd[idx] = dxInterp * dxdd  + dyInterp * dydd;
-			r[idx] = hw*residual;
+			// ∂f(x)/∂δξ = J_pose, J_{pose, photo} = J_y
+			dp0[idx] = new_idepth*dxInterp;                   // I_x*rho_2*f_x
+			dp1[idx] = new_idepth*dyInterp;                   // I_y*rho_2*f_y
+			dp2[idx] = -new_idepth*(u*dxInterp + v*dyInterp); // -rho_2 * (I_x*f_x*u_2' + I_y*f_y*v_2')
+			dp3[idx] = -u*v*dxInterp - (1+v*v)*dyInterp;      // -I_x*f_x*u_2'*v_2' - I_y*f_y*(1+v_2'*v_2')
+			dp4[idx] = (1+u*u)*dxInterp + u*v*dyInterp;       // I_x*fx_x(1+u_2'*u_2') + I_y*f_y*(1+v_2'*v_2')
+			dp5[idx] = -v*dxInterp + u*dyInterp;              // -(I_x*f_x)*v + (I_y*f_x)*v, where I_x, I_y are interpolated. e.g. dxInterp=I_x*f_x
+			// ∂f(x)/∂a = J_{photo_a}
+			dp6[idx] = - hw*r2new_aff[0] * rlR;               // affine light weight a: -hw*exp(a)*I_1(p)
+			// ∂f(x)/∂b = J_{photo_b}
+			dp7[idx] = - hw*1;                                // affine light bias b: -hw*b, where b is initialized to 1
+			// ∂f(x)/∂i_depth = J_rho
+			dd[idx] = dxInterp * dxdd  + dyInterp * dydd;     // partial derivative by inverse depth(rho_1) I_x * f_x*(t_x-u_2'*t_z) + I_y * f_y*(t_x-u_2'*t_z)
+			// f(x) = hw*r 
+			r[idx] = hw*residual;                             // just Residual with weight. it's f(x). it's associated to b of Hx=b, where b = -J*f(x)
 
-			float maxstep = 1.0f / Vec2f(dxdd*fxl, dydd*fyl).norm();
+			float maxstep = 1.0f / Vec2f(dxdd*fxl, dydd*fyl).norm(); // Newton-Rapson step size
 			if(maxstep < point->maxstep) point->maxstep = maxstep;
 
-			// immediately compute dp*dd' and dd*dd' in JbBuffer1.
-			JbBuffer_new[i][0] += dp0[idx]*dd[idx];
-			JbBuffer_new[i][1] += dp1[idx]*dd[idx];
-			JbBuffer_new[i][2] += dp2[idx]*dd[idx];
-			JbBuffer_new[i][3] += dp3[idx]*dd[idx];
-			JbBuffer_new[i][4] += dp4[idx]*dd[idx];
-			JbBuffer_new[i][5] += dp5[idx]*dd[idx];
-			JbBuffer_new[i][6] += dp6[idx]*dd[idx];
-			JbBuffer_new[i][7] += dp7[idx]*dd[idx];
-			JbBuffer_new[i][8] += r[idx]*dd[idx];
-			JbBuffer_new[i][9] += dd[idx]*dd[idx];
+			/***Start Computation of Shur complement sub matrix element***/
+			// immediately compute dp*dd' and dd*dd' in JbBuffer1, << THIS WILL BE USED SHUR Complement!
+			// J_y*J_rho, J_rho*r, J_rho*J_rho => shur complement sub matrix elements
+			JbBuffer_new[i][0] += dp0[idx]*dd[idx]; // sum J_pose * J_rho
+			JbBuffer_new[i][1] += dp1[idx]*dd[idx]; // sum J_pose * J_rho
+			JbBuffer_new[i][2] += dp2[idx]*dd[idx]; // sum J_pose * J_rho
+			JbBuffer_new[i][3] += dp3[idx]*dd[idx]; // sum J_pose * J_rho
+			JbBuffer_new[i][4] += dp4[idx]*dd[idx]; // sum J_pose * J_rho
+			JbBuffer_new[i][5] += dp5[idx]*dd[idx]; // sum J_pose * J_rho
+			JbBuffer_new[i][6] += dp6[idx]*dd[idx]; // sum J_photo_a * J_rho
+			JbBuffer_new[i][7] += dp7[idx]*dd[idx]; // sum J_photo_b * J_rho
+			JbBuffer_new[i][8] += r[idx]*dd[idx];   // b_rho = sum J_rho*f(x)
+			JbBuffer_new[i][9] += dd[idx]*dd[idx];  // sum J_rho * J_rho
+			/***End Computation of Shur complement sub matrix element***/
 		}
 
 		if(!isGood || energy > point->outlierTH*20)
@@ -469,9 +476,9 @@ Vec3f CoarseInitializer::calcResAndGS(
 		point->energy_new[0] = energy;
 
 		// update Hessian matrix.
-		for(int i=0;i+3<patternNum;i+=4)
+		for(int i=0;i+3<patternNum;i+=4) // i=0, 4 & 0+3<8 ok, 4+3<8, ok after(i=8) exit loop
 			acc9.updateSSE(
-					_mm_load_ps(((float*)(&dp0))+i),
+					_mm_load_ps(((float*)(&dp0))+i), // load packed floats {0,1,2,3}, {4,5,6,7} 
 					_mm_load_ps(((float*)(&dp1))+i),
 					_mm_load_ps(((float*)(&dp2))+i),
 					_mm_load_ps(((float*)(&dp3))+i),
@@ -481,8 +488,8 @@ Vec3f CoarseInitializer::calcResAndGS(
 					_mm_load_ps(((float*)(&dp7))+i),
 					_mm_load_ps(((float*)(&r))+i));
 
-
-		for(int i=((patternNum>>2)<<2); i < patternNum; i++)
+		// SSE2는 128 단위로 더하고 나머지는 따로 추가하기 때문에 0, 4, 8 뒤에 남는 값을 더합니다.
+		for(int i=((patternNum>>2)<<2); i < patternNum; i++) // (patternNum>>2)<<2는 0번째, 1번째 비트를 제거한다. i = 0b 0000 01xx => 0b 0000 0100 = 8
 			acc9.updateSingle(
 					(float)dp0[i],(float)dp1[i],(float)dp2[i],(float)dp3[i],
 					(float)dp4[i],(float)dp5[i],(float)dp6[i],(float)dp7[i],
@@ -511,49 +518,53 @@ Vec3f CoarseInitializer::calcResAndGS(
 		}
 		else
 		{
-			point->energy_new[1] = (point->idepth_new-1)*(point->idepth_new-1);
+			point->energy_new[1] = (point->idepth_new-1)*(point->idepth_new-1); // regularizer term => error 2-norm
 			E.updateSingle((float)(point->energy_new[1]));
 		}
 	}
 	EAlpha.finish();
 	float alphaEnergy = alphaW*(EAlpha.A + refToNew.translation().squaredNorm() * npts);
+	// alphaEnergy is large if depth set far(rho->0), translation is large.
+	// In above `alphaEnergy` variable, EAlpha.A is zero. So,
+	// alphaEnergy = alphaW*refToNew.translation().squaredNorm()*npts;
+	// where alphaW = 150*150
 
 	//printf("AE = %f * %f + %f\n", alphaW, EAlpha.A, refToNew.translation().squaredNorm() * npts);
 
 
-	// compute alpha opt.
+	// compute alpha opt. // alphaK is 2.5*2.5
 	float alphaOpt;
-	if(alphaEnergy > alphaK*npts)
+	if(alphaEnergy > alphaK*npts) // 에너지가 alphaK*npts보다 크면, 평행이동량의 평균이 alphaK 보다 크면
 	{
-		alphaOpt = 0;
-		alphaEnergy = alphaK*npts;
+		alphaOpt = 0; // ??
+		alphaEnergy = alphaK*npts; // 에너지를 alphaK*npts로 다시 설정
 	}
 	else
 	{
-		alphaOpt = alphaW;
+		alphaOpt = alphaW; // alphaEnergy는 그대로 두고 alphaOpt를 alphaW로 설정
 	}
 
 
 	acc9SC.initialize();
 	for(int i=0;i<npts;i++)
 	{
-		Pnt* point = ptsl+i;
-		if(!point->isGood_new)
+		Pnt* point = ptsl+i; // lvl에 있는 pts의 i번째 점
+		if(!point->isGood_new) // good points만 처리
 			continue;
 
-		point->lastHessian_new = JbBuffer_new[i][9];
+		point->lastHessian_new = JbBuffer_new[i][9]; // J_rho*J_rho
+		// 평행이동 기준치 못넘긴 경우 추가 됨, 1) (rho-1)^2의 derivative , 2) translation
+		JbBuffer_new[i][8] += alphaOpt*(point->idepth_new - 1); 
+		JbBuffer_new[i][9] += alphaOpt; // (sum J_rho*J_rho) + alphaOpt 기준치 못넘긴 경우 추가 됨
 
-		JbBuffer_new[i][8] += alphaOpt*(point->idepth_new - 1);
-		JbBuffer_new[i][9] += alphaOpt;
-
-		if(alphaOpt==0)
+		if(alphaOpt==0) // alphaOpt가 0인 경우 얘네를 더함
 		{
 			JbBuffer_new[i][8] += couplingWeight*(point->idepth_new - point->iR);
 			JbBuffer_new[i][9] += couplingWeight;
 		}
 
 		JbBuffer_new[i][9] = 1/(1+JbBuffer_new[i][9]);
-		acc9SC.updateSingleWeighted(
+		acc9SC.updateSingleWeighted( // JbBuffer_new[i][9] is weight!!, also it is J_rho^2
 				(float)JbBuffer_new[i][0],(float)JbBuffer_new[i][1],(float)JbBuffer_new[i][2],(float)JbBuffer_new[i][3],
 				(float)JbBuffer_new[i][4],(float)JbBuffer_new[i][5],(float)JbBuffer_new[i][6],(float)JbBuffer_new[i][7],
 				(float)JbBuffer_new[i][8],(float)JbBuffer_new[i][9]);
@@ -582,7 +593,7 @@ Vec3f CoarseInitializer::calcResAndGS(
 
 
 
-	return Vec3f(E.A, alphaEnergy ,E.num);
+	return Vec3f(E.A, alphaEnergy ,E.num); // photo Error, reg. error, total error #
 }
 
 float CoarseInitializer::rescale()
@@ -629,11 +640,11 @@ Vec3f CoarseInitializer::calcEC(int lvl)
 	//printf("ER: %f %f %f!\n", couplingWeight*E.A1m[0], couplingWeight*E.A1m[1], (float)E.num.numIn1m);
 	return Vec3f(couplingWeight*E.A1m[0], couplingWeight*E.A1m[1], E.num);
 }
-void CoarseInitializer::optReg(int lvl)
+void CoarseInitializer::optReg(int lvl) // Regress iR with neighbors
 {
 	int npts = numPoints[lvl];
 	Pnt* ptsl = points[lvl];
-	if(!snapped)
+	if(!snapped) // If not snapped, iR is re-initialized by 1
 	{
 		for(int i=0;i<npts;i++)
 			ptsl[i].iR = 1;
@@ -706,17 +717,26 @@ void CoarseInitializer::propagateUp(int srcLvl)
 		}
 	}
 
-	optReg(srcLvl+1);
+	optReg(srcLvl+1);// Regress iR with neighbors
 }
-
-void CoarseInitializer::propagateDown(int srcLvl)
+	//@ 상위 정보를 사용하여 하위 계층을 초기화합니다
+	//@ param: 현재 피라미드 계층 +1
+	//@ 노트: 최상위 값을 초기화할 수 없음
+	/**
+	 * @brief는 상위 레이어를 사용하여 현재 레이어의 역심도와 iR을 업데이트하고, 사용된 원리는 가우스 분포 정규화 적입니다.
+	 * 
+	 * @param[in] srcLvl 
+	 */
+//  부모 역심도와 대응하는 포인트 헤시안으로 포인트의 역심도를 정규화함
+void CoarseInitializer::propagateDown(int srcLvl)// propagate from parent(coarse) to child(fine)
 {
 	assert(srcLvl>0);
 	// set idepth of target
-
-	int nptst= numPoints[srcLvl-1];
-	Pnt* ptss = points[srcLvl];
-	Pnt* ptst = points[srcLvl-1];
+	// target의 역심도를 설정함
+	// 여기서 pts는 pixelSelector로 선택된 점들이다.
+	int nptst= numPoints[srcLvl-1]; // Target layer의 점 개수 (현재 레이어)
+	Pnt* ptss = points[srcLvl]; // Source layer의 점 포인터
+	Pnt* ptst = points[srcLvl-1]; // Target layer의 점 포인터
 
 	for(int i=0;i<nptst;i++)
 	{
@@ -726,17 +746,19 @@ void CoarseInitializer::propagateDown(int srcLvl)
 		if(!parent->isGood || parent->lastHessian < 0.1) continue;
 		if(!point->isGood)
 		{
+			// 현시점이 좋지 않으면, 부모점의 값을 직접 주고 good로 설정한다
 			point->iR = point->idepth = point->idepth_new = parent->iR;
 			point->isGood=true;
 			point->lastHessian=0;
 		}
 		else
 		{
+			// 만약 이 점이 Good point라면, parent point의 역심도와 현재점의 역심도를 이용하여 가우스 분포 정규화적을 이용하여 현재점의 역심도를 갱신한다.
 			float newiR = (point->iR*point->lastHessian*2 + parent->iR*parent->lastHessian) / (point->lastHessian*2+parent->lastHessian);
 			point->iR = point->idepth = point->idepth_new = newiR;
 		}
 	}
-	optReg(srcLvl-1);
+	optReg(srcLvl-1); // Regress iR with neighbors
 }
 
 
@@ -772,8 +794,8 @@ void CoarseInitializer::setFirst(	CalibHessian* HCalib, FrameHessian* newFrameHe
 
 	PixelSelector sel(w[0],h[0]);
 
-	float* statusMap = new float[w[0]*h[0]];
-	bool* statusMapB = new bool[w[0]*h[0]];
+	float* statusMap = new float[w[0]*h[0]]; // If value > 0 then that point is selected to tracking.
+	bool* statusMapB = new bool[w[0]*h[0]]; 
 
 	float densities[] = {0.03,0.05,0.15,0.5,1};
 	for(int lvl=0; lvl<pyrLevelsUsed; lvl++)
@@ -788,7 +810,7 @@ void CoarseInitializer::setFirst(	CalibHessian* HCalib, FrameHessian* newFrameHe
 
 
 		if(points[lvl] != 0) delete[] points[lvl];
-		points[lvl] = new Pnt[npts];
+		points[lvl] = new Pnt[npts]; // related 3d points
 
 		// set idepth map to initially 1 everywhere.
 		int wl = w[lvl], hl = h[lvl];
@@ -801,25 +823,25 @@ void CoarseInitializer::setFirst(	CalibHessian* HCalib, FrameHessian* newFrameHe
 			if((lvl!=0 && statusMapB[x+y*wl]) || (lvl==0 && statusMap[x+y*wl] != 0))
 			{
 				//assert(patternNum==9);
-				pl[nl].u = x+0.1;
+				pl[nl].u = x+0.1; // why plus 0.1? `u` is float type variable. but 0.1 is double type.
 				pl[nl].v = y+0.1;
-				pl[nl].idepth = 1;
-				pl[nl].iR = 1;
+				pl[nl].idepth = 1; // inverse depth
+				pl[nl].iR = 1; // inverse depth regression variable
 				pl[nl].isGood=true;
-				pl[nl].energy.setZero();
-				pl[nl].lastHessian=0;
-				pl[nl].lastHessian_new=0;
-				pl[nl].my_type= (lvl!=0) ? 1 : statusMap[x+y*wl];
+				pl[nl].energy.setZero(); // Photometric error
+				pl[nl].lastHessian=0; // inverse depth hessian
+				pl[nl].lastHessian_new=0; // ???
+				pl[nl].my_type= (lvl!=0) ? 1 : statusMap[x+y*wl]; // If level is not original then save 1 or statusMap
 
-				Eigen::Vector3f* cpt = firstFrame->dIp[lvl] + x + y*w[lvl];
-				float sumGrad2=0;
-				for(int idx=0;idx<patternNum;idx++)
-				{
-					int dx = patternP[idx][0];
-					int dy = patternP[idx][1];
-					float absgrad = cpt[dx + dy*w[lvl]].tail<2>().squaredNorm();
-					sumGrad2 += absgrad;
-				}
+				//Eigen::Vector3f* cpt = firstFrame->dIp[lvl] + x + y*w[lvl]; // firstFrame->dIp[lvl] is address!! so variable name means "c"urrent "p"oin"t"
+				//float sumGrad2=0;
+				//for(int idx=0;idx<patternNum;idx++)
+				//{
+				//	int dx = patternP[idx][0]; // SSE efficient pattern for x
+				//	int dy = patternP[idx][1]; // SSE efficient pattern for y
+				//	float absgrad = cpt[dx + dy*w[lvl]].tail<2>().squaredNorm(); // in x,y directional gradient
+				//	sumGrad2 += absgrad;
+				//}
 
 //				float gth = setting_outlierTH * (sqrtf(sumGrad2)+setting_outlierTHSumComponent);
 //				pl[nl].outlierTH = patternNum*gth*gth;
@@ -860,21 +882,21 @@ void CoarseInitializer::resetPoints(int lvl)
 		pts[i].energy.setZero();
 		pts[i].idepth_new = pts[i].idepth;
 
-
+		// 최상층이고, isGood이 false인 경우, 주위 점의 평균을 사용해서 초기화
 		if(lvl==pyrLevelsUsed-1 && !pts[i].isGood)
 		{
 			float snd=0, sn=0;
 			for(int n = 0;n<10;n++)
-			{
+			{   // i번째 포인트의 n번째 이웃이 없거나 이웃의 상태가 good이 아닐 경우 continue
 				if(pts[i].neighbours[n] == -1 || !pts[pts[i].neighbours[n]].isGood) continue;
 				snd += pts[pts[i].neighbours[n]].iR;
 				sn += 1;
 			}
-
+			// 최근접 이웃 픽셀들의 iR의 평균으로 iR 설정
 			if(sn > 0)
 			{
 				pts[i].isGood=true;
-				pts[i].iR = pts[i].idepth = pts[i].idepth_new = snd/sn;
+				pts[i].iR = pts[i].idepth = pts[i].idepth_new = snd/sn; // average of near good points
 			}
 		}
 	}

@@ -269,6 +269,7 @@ private:
 	PixelSelector* pixelSelector;
 	CoarseDistanceMap* coarseDistanceMap;
 
+	// frameHessians는 optimization window 안에 있는 활성 된 키레임의 집합
 	std::vector<FrameHessian*> frameHessians;	// ONLY changed in marginalizeFrame and addFrame.
 	std::vector<PointFrameResidual*> activeResiduals;
 	float currentMinActDist;

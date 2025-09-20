@@ -58,7 +58,7 @@ public:
 	float iR;
 	float iRSumNum;
 
-	float lastHessian;
+	float lastHessian; // Hessian means covariance matrix entities?
 	float lastHessian_new;
 
 	// max stepsize for idepth (corresponding to max. movement in pixel-space).

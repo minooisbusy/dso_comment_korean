@@ -755,6 +755,7 @@ void EnergyFunctional::orthogonalize(VecX* b, MatXX* H)
 	for(int i=0;i<SNN.size();i++)
 		{ if(SNN[i] > setting_solverModeDelta*maxSv) SNN[i] = 1.0 / SNN[i]; else SNN[i] = 0; }
 
+	// N pseudo inverse
 	MatXX Npi = svdNN.matrixU() * SNN.asDiagonal() * svdNN.matrixV().transpose(); 	// [dim] x 9.
 	MatXX NNpiT = N*Npi.transpose(); 	// [dim] x [dim].
 	MatXX NNpiTS = 0.5*(NNpiT + NNpiT.transpose());	// = N * (N' * N)^-1 * N'.

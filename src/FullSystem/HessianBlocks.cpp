@@ -73,19 +73,24 @@ void PointHessian::release()
 
 void FrameHessian::setStateZero(const Vec10 &state_zero)
 {
+	// 이걸 보면 분명히 state_zero는 xi가 zero-vector이여야 한다.
 	assert(state_zero.head<6>().squaredNorm() < 1e-20);
 
 	this->state_zero = state_zero;
 
 
+	// Process Adjoint in Camera frame (Ad_{C}e_i)
+	const double h = 1e-3; // Small perturbation
 	for(int i=0;i<6;i++)
 	{
-		Vec6 eps; eps.setZero(); eps[i] = 1e-3;
+		Vec6 eps; eps.setZero(); eps[i] = h;
 		SE3 EepsP = Sophus::SE3::exp(eps);
 		SE3 EepsM = Sophus::SE3::exp(-eps);
-		SE3 w2c_leftEps_P_x0 = (get_worldToCam_evalPT() * EepsP) * get_worldToCam_evalPT().inverse();
+		SE3 w2c_leftEps_P_x0 = (get_worldToCam_evalPT() * EepsP) * get_worldToCam_evalPT().inverse(); // 좌표계를 선형화지점으로 바꾼 뒤 미소 변화(positive epsilon)를 표현한다. 
 		SE3 w2c_leftEps_M_x0 = (get_worldToCam_evalPT() * EepsM) * get_worldToCam_evalPT().inverse();
-		nullspaces_pose.col(i) = (w2c_leftEps_P_x0.log() - w2c_leftEps_M_x0.log())/(2e-3);
+		//?? 선형화 지점에서 adjoint의 차분..? 어떤의미지
+		// Log는 tangential space(벡터)로 매핑
+		nullspaces_pose.col(i) = (w2c_leftEps_P_x0.log() - w2c_leftEps_M_x0.log())/(2*h); // numerical differentiation
 	}
 	//nullspaces_pose.topRows<3>() *= SCALE_XI_TRANS_INVERSE;
 	//nullspaces_pose.bottomRows<3>() *= SCALE_XI_ROT_INVERSE;
@@ -130,7 +135,7 @@ void FrameHessian::makeImages(float* color, CalibHessian* HCalib)
 
 	for(int i=0;i<pyrLevelsUsed;i++)
 	{
-		dIp[i] = new Eigen::Vector3f[wG[i]*hG[i]];
+		dIp[i] = new Eigen::Vector3f[wG[i]*hG[i]]; // dIp[i]
 		absSquaredGrad[i] = new float[wG[i]*hG[i]];
 	}
 	dI = dIp[0];
@@ -154,8 +159,8 @@ void FrameHessian::makeImages(float* color, CalibHessian* HCalib)
 			int wlm1 = wG[lvlm1];
 			Eigen::Vector3f* dI_lm = dIp[lvlm1];
 
-
-
+			// I don't know why below code have to behaved.
+			// compute 4-neighbor(?) average value(intensity) at lvl-1 pyramid then return to current(lvl) pyramid.
 			for(int y=0;y<hl;y++)
 				for(int x=0;x<wl;x++)
 				{
@@ -223,4 +228,3 @@ void FrameFramePrecalc::set(FrameHessian* host, FrameHessian* target, CalibHessi
 }
 
 }
-

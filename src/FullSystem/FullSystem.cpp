@@ -472,25 +472,27 @@ void FullSystem::traceNewCoarse(FrameHessian* fh)
 	K(0,2) = Hcalib.cxl();
 	K(1,2) = Hcalib.cyl();
 
+	// frameHessians는 윈도우 내에 있는 활성 키프레임의 집합
 	for(FrameHessian* host : frameHessians)		// go through all active frames
 	{
-
+		// 첫 호출에서, host는 `firstFrame`이다.
 		SE3 hostToNew = fh->PRE_worldToCam * host->PRE_camToWorld;
 		Mat33f KRKi = K * hostToNew.rotationMatrix().cast<float>() * K.inverse();
 		Vec3f Kt = K * hostToNew.translation().cast<float>();
 
 		Vec2f aff = AffLight::fromToVecExposure(host->ab_exposure, fh->ab_exposure, host->aff_g2l(), fh->aff_g2l()).cast<float>();
 
+		// host의 pointHessian을 traceOn으로 처리함.
 		for(ImmaturePoint* ph : host->immaturePoints)
 		{
 			ph->traceOn(fh, KRKi, Kt, aff, &Hcalib, false );
 
-			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_GOOD) trace_good++;
-			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_BADCONDITION) trace_badcondition++;
-			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_OOB) trace_oob++;
-			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_OUTLIER) trace_out++;
-			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_SKIPPED) trace_skip++;
-			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_UNINITIALIZED) trace_uninitialized++;
+			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_GOOD) trace_good++; // Trace completed
+			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_BADCONDITION) trace_badcondition++; // bad condition to trace
+			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_OOB) trace_oob++; // Out of Bound
+			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_OUTLIER) trace_out++; // ??
+			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_SKIPPED) trace_skip++; // trace boundary is already small, so skipped
+			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_UNINITIALIZED) trace_uninitialized++; // ??
 			trace_total++;
 		}
 	}
@@ -833,18 +835,18 @@ void FullSystem::addActiveFrame( ImageAndExposure* image, int id )
 
 			coarseInitializer->setFirst(&Hcalib, fh);
 		}
-		else if(coarseInitializer->trackFrame(fh, outputWrapper))	// if SNAPPED
+		else if(coarseInitializer->trackFrame(fh, outputWrapper))	// if SNAPPED then true
 		{
-
-			initializeFromInitializer(fh);
-			lock.unlock();
-			deliverTrackedFrame(fh, true);
-		}
+			// first frame and current fh
+			initializeFromInitializer(fh); // energyFunctional(ef), firstFrame, newFrame을 초기화.
+			lock.unlock(); // To deliver frame hessian (fh) to 
+			deliverTrackedFrame(fh, true); // 2nd arg(needKF) is true, So current fh be a Keyframe
+		}// Here, can i get how many keyframes in system?
 		else
 		{
 			// if still initializing
 			fh->shell->poseValid = false;
-			delete fh;
+			delete fh; // YOU ARE FIRED	! (Actually, marginalized in trackFrame(...))
 		}
 		return;
 	}
@@ -858,7 +860,7 @@ void FullSystem::addActiveFrame( ImageAndExposure* image, int id )
 		}
 
 
-		Vec4 tres = trackNewCoarse(fh);
+		Vec4 tres = trackNewCoarse(fh); // `fh` gets successed coarsest level motion hypothesis
 		if(!std::isfinite((double)tres[0]) || !std::isfinite((double)tres[1]) || !std::isfinite((double)tres[2]) || !std::isfinite((double)tres[3]))
         {
             printf("Initial Tracking failed: LOST!\n");
@@ -923,7 +925,7 @@ void FullSystem::deliverTrackedFrame(FrameHessian* fh, bool needKF)
 
 
 
-		if(needKF) makeKeyFrame(fh);
+		if(needKF) makeKeyFrame(fh); // TODO : List What I have TODO.
 		else makeNonKeyFrame(fh);
 	}
 	else
@@ -1041,7 +1043,7 @@ void FullSystem::makeNonKeyFrame( FrameHessian* fh)
 void FullSystem::makeKeyFrame( FrameHessian* fh)
 {
 	// needs to be set by mapping thread
-	{
+	{   // 선형화 지점을 설정하고, 행렬 J의 영공간의 기저를 계산함
 		boost::unique_lock<boost::mutex> crlock(shellPoseMutex);
 		assert(fh->shell->trackingRef != 0);
 		fh->shell->camToWorld = fh->shell->trackingRef->camToWorld * fh->shell->camToTrackingRef;
@@ -1201,7 +1203,7 @@ void FullSystem::initializeFromInitializer(FrameHessian* newFrame)
 	boost::unique_lock<boost::mutex> lock(mapMutex);
 
 	// add firstframe.
-	FrameHessian* firstFrame = coarseInitializer->firstFrame;
+	FrameHessian* firstFrame = coarseInitializer->firstFrame; // From setFrist method of coarseInitializer
 	firstFrame->idx = frameHessians.size();
 	frameHessians.push_back(firstFrame);
 	firstFrame->frameID = allKeyFramesHistory.size();
@@ -1212,21 +1214,21 @@ void FullSystem::initializeFromInitializer(FrameHessian* newFrame)
 	//int numPointsTotal = makePixelStatus(firstFrame->dI, selectionMap, wG[0], hG[0], setting_desiredDensity);
 	//int numPointsTotal = pixelSelector->makeMaps(firstFrame->dIp, selectionMap,setting_desiredDensity);
 
-	firstFrame->pointHessians.reserve(wG[0]*hG[0]*0.2f);
+	firstFrame->pointHessians.reserve(wG[0]*hG[0]*0.2f); // Just take 20% points?
 	firstFrame->pointHessiansMarginalized.reserve(wG[0]*hG[0]*0.2f);
 	firstFrame->pointHessiansOut.reserve(wG[0]*hG[0]*0.2f);
 
 
 	float sumID=1e-5, numID=1e-5;
-	for(int i=0;i<coarseInitializer->numPoints[0];i++)
+	for(int i=0;i<coarseInitializer->numPoints[0];i++) // points are acquired in `firstFrame`
 	{
-		sumID += coarseInitializer->points[0][i].iR;
+		sumID += coarseInitializer->points[0][i].iR; // Original scale iR value
 		numID++;
 	}
-	float rescaleFactor = 1 / (sumID / numID);
+	float rescaleFactor = 1 / (sumID / numID); // iR의 평균으로 나누는 값이다.
 
 	// randomly sub-select the points I need.
-	float keepPercentage = setting_desiredPointDensity / coarseInitializer->numPoints[0];
+	float keepPercentage = setting_desiredPointDensity / coarseInitializer->numPoints[0]; // 전체를 원하는 밀도로 곱하면 원하는 밀도가 되지
 
     if(!setting_debugout_runquiet)
         printf("Initialization: keep %.1f%% (need %d, have %d)!\n", 100*keepPercentage,
@@ -1236,19 +1238,19 @@ void FullSystem::initializeFromInitializer(FrameHessian* newFrame)
 	{
 		if(rand()/(float)RAND_MAX > keepPercentage) continue;
 
-		Pnt* point = coarseInitializer->points[0]+i;
-		ImmaturePoint* pt = new ImmaturePoint(point->u+0.5f,point->v+0.5f,firstFrame,point->my_type, &Hcalib);
+		Pnt* point = coarseInitializer->points[0]+i; // observed in firstFrame
+		ImmaturePoint* pt = new ImmaturePoint(point->u+0.5f,point->v+0.5f,firstFrame,point->my_type, &Hcalib); // idepth_min(0), idepth_max(NAN)
 
 		if(!std::isfinite(pt->energyTH)) { delete pt; continue; }
 
 
 		pt->idepth_max=pt->idepth_min=1;
-		PointHessian* ph = new PointHessian(pt, &Hcalib);
-		delete pt;
+		PointHessian* ph = new PointHessian(pt, &Hcalib); // 내부적으로 idepth= (pt->idepth_max+pt->idepth_min)*0.5
+		delete pt; // ImmaturePoint is deleted..
 		if(!std::isfinite(ph->energyTH)) {delete ph; continue;}
 
-		ph->setIdepthScaled(point->iR*rescaleFactor);
-		ph->setIdepthZero(ph->idepth);
+		ph->setIdepthScaled(point->iR*rescaleFactor); // iR에 rescaleFactor 붙이는 이유
+		ph->setIdepthZero(ph->idepth);				  // setIdepthScaled와 setIdepthZero는 어떤 차이가 있는거야?
 		ph->hasDepthPrior=true;
 		ph->setPointStatus(PointHessian::ACTIVE);
 

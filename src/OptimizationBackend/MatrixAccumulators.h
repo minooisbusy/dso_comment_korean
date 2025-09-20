@@ -88,7 +88,7 @@ private:
   }
 };
 
-class Accumulator11
+class Accumulator11 // Only <1,1> Accumulator == Scalar Accumulator
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
@@ -107,12 +107,12 @@ public:
 
   inline void finish()
   {
-	shiftUp(true);
+	shiftUp(true); // Whole variables shifted to SSEData1m
 	A=SSEData1m[0+0] + SSEData1m[0+1] + SSEData1m[0+2] + SSEData1m[0+3];
   }
 
 
-  inline void updateSingle(
+  inline void updateSingle( // This function update only single variable
 		  const float val)
   {
 	  SSEData[0] += val;
@@ -120,7 +120,7 @@ public:
 	  shiftUp(false);
   }
 
-  inline void updateSSE(
+  inline void updateSSE( // This function update four floating point variable
 		  const __m128 val)
   {
 	  _mm_store_ps(SSEData, _mm_add_ps(_mm_load_ps(SSEData),val));
@@ -147,15 +147,15 @@ public:
 
 
 private:
-  EIGEN_ALIGN16 float SSEData[4*1];
-  EIGEN_ALIGN16 float SSEData1k[4*1];
-  EIGEN_ALIGN16 float SSEData1m[4*1];
-  float numIn1, numIn1k, numIn1m;
+  EIGEN_ALIGN16 float SSEData[4*1]; // Accumulated data with 4-float variable
+  EIGEN_ALIGN16 float SSEData1k[4*1]; // If number of accumulated SSEData overflow 1,000(1k) then shift accumulated values to SSEData1k!
+  EIGEN_ALIGN16 float SSEData1m[4*1]; //  If number of accumulated SSEData1k over flow 1,000(1k) then shift accumulated values to SSEData1m!
+  float numIn1, numIn1k, numIn1m; // 1k*1k = 10^6 = 1,000,000 = 1m
 
 
   void shiftUp(bool force)
   {
-	  if(numIn1 > 1000 || force)
+	  if(numIn1 > 1000 || force) // Shift values from SSEData 
 	  {
 		  _mm_store_ps(SSEData1k, _mm_add_ps(_mm_load_ps(SSEData),_mm_load_ps(SSEData1k)));
 		  numIn1k+=numIn1; numIn1=0;
@@ -175,7 +175,7 @@ private:
 
 
 template<int i>
-class AccumulatorX
+class AccumulatorX // x-vector Accumulator
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
@@ -243,7 +243,7 @@ private:
 
 
 
-class Accumulator14
+class Accumulator14 // 14x14 accumulator
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
@@ -256,7 +256,7 @@ public:
   {
 	H.setZero();
 	b.setZero();
-    memset(SSEData,0, sizeof(float)*4*105);
+    memset(SSEData,0, sizeof(float)*4*105); // 14*15/2=105
     memset(SSEData1k,0, sizeof(float)*4*105);
     memset(SSEData1m,0, sizeof(float)*4*105);
     num = numIn1 = numIn1k = numIn1m = 0;
@@ -992,7 +992,7 @@ public:
   {
 	H.setZero();
 	b.setZero();
-    memset(SSEData,0, sizeof(float)*4*45);
+    memset(SSEData,0, sizeof(float)*4*45); // 5*9 = 45
     memset(SSEData1k,0, sizeof(float)*4*45);
     memset(SSEData1m,0, sizeof(float)*4*45);
     num = numIn1 = numIn1k = numIn1m = 0;
@@ -1025,24 +1025,24 @@ public:
 		  const __m128 J8)
   {
 	  float* pt=SSEData;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J0))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J1))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J2))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J3))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J4))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J5))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J6))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J7))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J8))); pt+=4;
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J0))); pt+=4; // 1
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J1))); pt+=4; // 2
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J2))); pt+=4; // 3
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J3))); pt+=4; // 4
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J4))); pt+=4; // 5
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J5))); pt+=4; // 6
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J6))); pt+=4; // 7
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J7))); pt+=4; // 8
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J0,J8))); pt+=4; // 9
 
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J1))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J2))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J3))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J4))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J5))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J6))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J7))); pt+=4;
-	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J8))); pt+=4;
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J1))); pt+=4; // 1
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J2))); pt+=4; // 2
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J3))); pt+=4; // 3
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J4))); pt+=4; // 4
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J5))); pt+=4; // 5
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J6))); pt+=4; // 6
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J7))); pt+=4; // 7
+	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J1,J8))); pt+=4; // 8
 
 	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J2,J2))); pt+=4;
 	  _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt),_mm_mul_ps(J2,J3))); pt+=4;

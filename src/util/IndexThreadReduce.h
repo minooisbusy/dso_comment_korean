@@ -33,6 +33,7 @@
 
 namespace dso
 {
+using namespace boost::placeholders;
 
 template<typename Running>
 class IndexThreadReduce
