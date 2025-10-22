@@ -50,16 +50,16 @@ float setting_initialRotPrior = 1e11;
 float setting_initialTransPrior = 1e10;
 float setting_initialAffBPrior = 1e14;
 float setting_initialAffAPrior = 1e14;
-float setting_initialCalibHessian = 5e9;
+float setting_initialCalibHessian = 5e9; // Prior of Intrinsics
 
 
 
 
 
 /* some modes for solving the resulting linear system (e.g. orthogonalize wrt. unobservable dimensions) */
-int setting_solverMode = SOLVER_FIX_LAMBDA | SOLVER_ORTHOGONALIZE_X_LATER;
+int setting_solverMode = SOLVER_FIX_LAMBDA | SOLVER_ORTHOGONALIZE_X_LATER; // 0x0880
 double setting_solverModeDelta = 0.00001;
-bool setting_forceAceptStep = true;
+bool setting_forceAceptStep = true; // 에너지 증가 여부와관계 없이 항상 수용 하도록 함
 
 
 

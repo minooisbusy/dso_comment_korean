@@ -48,8 +48,8 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 
 	if(adHost != 0) delete[] adHost;
 	if(adTarget != 0) delete[] adTarget;
-	adHost = new Mat88[nFrames*nFrames];
-	adTarget = new Mat88[nFrames*nFrames];
+	adHost = new Mat88[nFrames*nFrames]; // 8x8 행렬을 프레임 개수의 제곱 만큼 할당
+	adTarget = new Mat88[nFrames*nFrames]; // 8x8 행렬을 프레임 개수의 제곱 만큼 할당
 
 	for(int h=0;h<nFrames;h++)
 		for(int t=0;t<nFrames;t++)
@@ -57,12 +57,18 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 			FrameHessian* host = frames[h]->data;
 			FrameHessian* target = frames[t]->data;
 
+			// 오른쪽부터 읽어서, H->W->T로 가니, Host->Target 변환.
 			SE3 hostToTarget = target->get_worldToCam_evalPT() * host->get_worldToCam_evalPT().inverse();
 
-			Mat88 AH = Mat88::Identity();
+			// Adjoint Host?
+			Mat88 AH = Mat88::Identity(); // 8 = 6 + 2, 6 for pose, 2 for photo. cal.
 			Mat88 AT = Mat88::Identity();
 
+			// Host have to switch coordinate system to target. So Adjoint is needed.
+			// $T_h$에 지역 섭동을 수행하여 $T_{ht}$에 섭동을 추가하면, 아래 꼴이 된다.
+			// 의미: T_{ht}'가 T_{ht}에서 얼마만큼 변했는가?
 			AH.topLeftCorner<6,6>() = -hostToTarget.Adj().transpose();
+			// Target already in target frame. So, Identity mapping is valid.
 			AT.topLeftCorner<6,6>() = Mat66::Identity();
 
 
@@ -84,7 +90,8 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 			adHost[h+t*nFrames] = AH;
 			adTarget[h+t*nFrames] = AT;
 		}
-	cPrior = VecC::Constant(setting_initialCalibHessian);
+	// Prior가 매우 크다, 따라서 초기에 주어진 파라미터 값을 매우 신뢰한다는 뜻.
+	cPrior = VecC::Constant(setting_initialCalibHessian); // setting_initialCalibHessian = 5e9
 
 
 	if(adHostF != 0) delete[] adHostF;
@@ -92,6 +99,7 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 	adHostF = new Mat88f[nFrames*nFrames];
 	adTargetF = new Mat88f[nFrames*nFrames];
 
+	// Type cast from double to float
 	for(int h=0;h<nFrames;h++)
 		for(int t=0;t<nFrames;t++)
 		{
@@ -99,7 +107,7 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 			adTargetF[h+t*nFrames] = adTarget[h+t*nFrames].cast<float>();
 		}
 
-	cPriorF = cPrior.cast<float>();
+	cPriorF = cPrior.cast<float>(); // double to float
 
 
 	EFAdjointsValid = true;
@@ -121,8 +129,8 @@ EnergyFunctional::EnergyFunctional()
 
 	nFrames = nResiduals = nPoints = 0;
 
-	HM = MatXX::Zero(CPARS,CPARS);
-	bM = VecX::Zero(CPARS);
+	HM = MatXX::Zero(CPARS,CPARS); // 4x4 행렬
+	bM = VecX::Zero(CPARS); // 4-벡터
 
 
 	accSSE_top_L = new AccumulatedTopHessianSSE();
@@ -167,20 +175,36 @@ EnergyFunctional::~EnergyFunctional()
 
 
 
-
+// delta = x - x_0 (current - lin.point)
 void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 {
-	if(adHTdeltaF != 0) delete[] adHTdeltaF;
-	adHTdeltaF = new Mat18f[nFrames*nFrames];
+	// Delta of Pose & photo.params
+	if(adHTdeltaF != 0) delete[] adHTdeltaF; // existing dynamic array delete
+	// adjoint of Host-Target delta frame?
+	adHTdeltaF = new Mat18f[nFrames*nFrames]; // allocate new nFrames**2 1x8 matrix
+
+	// pose delta
 	for(int h=0;h<nFrames;h++)
 		for(int t=0;t<nFrames;t++)
 		{
+			// Jp * Δp (포인트 p의 투영 위치에 대한 자코비안과 포즈 증분의 곱) 항을 미리 계산합니다.
+			// 이는 잔차의 선형화된 근사치 r(x) ≈ r(x₀) + JΔx 에서 JΔx의 일부입니다.
+			// Δp는 host와 target 프레임의 포즈 증분(Δx_h, Δx_t)에 의해 결정됩니다.
+			// adHostF ≈ Jp * J_h, adTargetF ≈ Jp * J_t 이므로,
+			// adHTdeltaF^T ≈ (Jp * J_h) * Δx_h + (Jp * J_t) * Δx_t = Jp * Δp 가 됩니다.
+			// 이 값을 미리 계산해두면 에너지 계산 시 반복적인 연산을 피할 수 있습니다.
 			int idx = h+t*nFrames;
+
+			// Δx_h: frames[h]->data->get_state_minus_stateZero()
+			// Δx_t: frames[t]->data->get_state_minus_stateZero()
 			adHTdeltaF[idx] = frames[h]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adHostF[idx]
 					        +frames[t]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adTargetF[idx];
 		}
 
-	cDeltaF = HCalib->value_minus_value_zero.cast<float>();
+	// delta of calibration parameters. (current estimate)-(first estimat)
+	cDeltaF = HCalib->value_minus_value_zero.cast<float>(); 
+	
+	// pose와 photo.cal의 delta(=x - x_0)
 	for(EFFrame* f : frames)
 	{
 		f->delta = f->data->get_state_minus_stateZero().head<8>();
@@ -194,7 +218,7 @@ void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 }
 
 // accumulates & shifts L.
-void EnergyFunctional::accumulateAF_MT(MatXX &H, VecX &b, bool MT)
+void EnergyFunctional::accumulateAF_MT(MatXX &H, VecX &b, bool MT) // HA_top, bA_top,multiThreading
 {
 	if(MT)
 	{
@@ -265,16 +289,16 @@ void EnergyFunctional::resubstituteF_MT(VecX x, CalibHessian* HCalib, bool MT)
 	assert(x.size() == CPARS+nFrames*8);
 
 	VecXf xF = x.cast<float>();
-	HCalib->step = - x.head<CPARS>();
+	HCalib->step = - x.head<CPARS>(); // x means incremental. head<n>(): 0번째부터 n-1번째 원소까지 가져옴, minus를 붙임!
 
-	Mat18f* xAd = new Mat18f[nFrames*nFrames];
-	VecCf cstep = xF.head<CPARS>();
+	Mat18f* xAd = new Mat18f[nFrames*nFrames]; // 뭘까..? xAd..? Adjoint?
+	VecCf cstep = xF.head<CPARS>();            // camera parameter step
 	for(EFFrame* h : frames)
 	{
-		h->data->step.head<8>() = - x.segment<8>(CPARS+8*h->idx);
-		h->data->step.tail<2>().setZero();
+		h->data->step.head<8>() = - x.segment<8>(CPARS+8*h->idx); // fh->step.head<8> 호스트 프레임의 업데이트 스텝 가져옴
+		h->data->step.tail<2>().setZero(); // 광도 파라미터 업데이트는 0으로 만듦
 
-		for(EFFrame* t : frames)
+		for(EFFrame* t : frames) // 타겟 프레임, adHostF*dx_host + adTargetF*dx_target
 			xAd[nFrames*h->idx + t->idx] = xF.segment<8>(CPARS+8*h->idx).transpose() *   adHostF[h->idx+nFrames*t->idx]
 			            + xF.segment<8>(CPARS+8*t->idx).transpose() * adTargetF[h->idx+nFrames*t->idx];
 	}
@@ -297,7 +321,7 @@ void EnergyFunctional::resubstituteFPt(
 
 		int ngoodres = 0;
 		for(EFResidual* r : p->residualsAll) if(r->isActive()) ngoodres++;
-		if(ngoodres==0)
+		if(ngoodres==0) // good residual의 개수가 0이면 cont'
 		{
 			p->data->step = 0;
 			continue;
@@ -332,9 +356,9 @@ double EnergyFunctional::calcMEnergyF()
 void EnergyFunctional::calcLEnergyPt(int min, int max, Vec10* stats, int tid)
 {
 
-	Accumulator11 E;
+	Accumulator11 E; // scalar accumulator
 	E.initialize();
-	VecCf dc = cDeltaF;
+	VecCf dc = cDeltaF; // delta of calibration parameter in float type
 
 	for(int i=min;i<max;i++)
 	{
@@ -346,7 +370,7 @@ void EnergyFunctional::calcLEnergyPt(int min, int max, Vec10* stats, int tid)
 			if(!r->isLinearized || !r->isActive()) continue;
 
 			Mat18f dp = adHTdeltaF[r->hostIDX+nFrames*r->targetIDX];
-			RawResidualJacobian* rJ = r->J;
+			RawResidualJacobian* rJ = r->J; // Jacobian of a residual
 
 
 
@@ -402,7 +426,7 @@ double EnergyFunctional::calcLEnergyF_MT()
 
 	double E = 0;
 	for(EFFrame* f : frames)
-        E += f->delta_prior.cwiseProduct(f->prior).dot(f->delta_prior);
+        E += f->delta_prior.cwiseProduct(f->prior).dot(f->delta_prior);// cwiseProduct: element-wise product(Hadarmard)
 
 	E += cDeltaF.cwiseProduct(cPriorF).dot(cDeltaF);
 
@@ -428,12 +452,12 @@ EFResidual* EnergyFunctional::insertResidual(PointFrameResidual* r)
 }
 EFFrame* EnergyFunctional::insertFrame(FrameHessian* fh, CalibHessian* Hcalib)
 {
-	EFFrame* eff = new EFFrame(fh);
-	eff->idx = frames.size();
-	frames.push_back(eff);
+	EFFrame* eff = new EFFrame(fh); // 새로운 EFFrame 동적 할당
+	eff->idx = frames.size();       // 인덱스 설정
+	frames.push_back(eff);          // EnergyFunctional에 frames 추가
 
 	nFrames++;
-	fh->efFrame = eff;
+	fh->efFrame = eff;              // 프론트엔드에서 백엔드를 가리키도록 설정
 
 	assert(HM.cols() == 8*nFrames+CPARS-8);
 	bM.conservativeResize(8*nFrames+CPARS);
@@ -446,12 +470,14 @@ EFFrame* EnergyFunctional::insertFrame(FrameHessian* fh, CalibHessian* Hcalib)
 	EFAdjointsValid=false;
 	EFDeltaValid=false;
 
-	setAdjointsF(Hcalib);
-	makeIDX();
+	setAdjointsF(Hcalib); // adjoint matrix 계산
+	makeIDX();            // 키프레임의 번호 부여, 잔차의 호스트-타겟 인덱스 갱신
 
-
+	// Initialize connectivity map entries for the new frame.
+	// This pre-allocates space for tracking co-observations with other keyframes.
 	for(EFFrame* fh2 : frames)
 	{
+		// eff는 새로이 추가 된 키프레임이다. 
         connectivityMap[(((uint64_t)eff->frameID) << 32) + ((uint64_t)fh2->frameID)] = Eigen::Vector2i(0,0);
 		if(fh2 != eff)
             connectivityMap[(((uint64_t)fh2->frameID) << 32) + ((uint64_t)eff->frameID)] = Eigen::Vector2i(0,0);
@@ -461,12 +487,13 @@ EFFrame* EnergyFunctional::insertFrame(FrameHessian* fh, CalibHessian* Hcalib)
 }
 EFPoint* EnergyFunctional::insertPoint(PointHessian* ph)
 {
+	//(PointHessian, PointHessian->FrameHessian->EFFrame)
 	EFPoint* efp = new EFPoint(ph, ph->host->efFrame);
 	efp->idxInPoints = ph->host->efFrame->points.size();
 	ph->host->efFrame->points.push_back(efp);
 
 	nPoints++;
-	ph->efPoint = efp;
+	ph->efPoint = efp; // EPPoint "pointed-by"  PointHessian
 
 	EFIndicesValid = false;
 
@@ -512,23 +539,25 @@ void EnergyFunctional::marginalizeFrame(EFFrame* fh)
 //
 
 
-
 	if((int)fh->idx != (int)frames.size()-1)
 	{
-		int io = fh->idx*8+CPARS;	// index of frame to move to end
-		int ntail = 8*(nFrames-fh->idx-1);
+		int io = fh->idx*8+CPARS;	// 현재 프레임 인덱스만큼의 카메라 파라미터 + intrinsics = 포즈(6) 및 광도파라미터(2) + intrinsics(4)가 있다.
+		int ntail = 8*(nFrames-fh->idx-1); // 주변화 후 벡터의 차원
 		assert((io+8+ntail) == nFrames*8+CPARS);
 
-		Vec8 bTmp = bM.segment<8>(io);
-		VecX tailTMP = bM.tail(ntail);
-		bM.segment(io,ntail) = tailTMP;
+		// b-vector 계산: 주변화 할 프레임의 상태 변수를 끝으로 옮긴다. (swap?)
+		Vec8 bTmp = bM.segment<8>(io); // io부터 8개 요소에 대한 벡터
+		VecX tailTMP = bM.tail(ntail); // bM의 뒤에서 ntail 개의 요소
+		bM.segment(io,ntail) = tailTMP; // bM의 io부터 ntail까지 tailTMP로 대체
 		bM.tail<8>() = bTmp;
 
-		MatXX HtmpCol = HM.block(0,io,odim,8);
+		// H 행렬에서 주변화 하려는 위치 8개 열을 마지막 열과 스왑
+		MatXX HtmpCol = HM.block(0,io,odim,8); // 0행에서 odim개 행, io열에서 9개 행의 블록을 잡는다.
 		MatXX rightColsTmp = HM.rightCols(ntail);
 		HM.block(0,io,odim,ntail) = rightColsTmp;
 		HM.rightCols(8) = HtmpCol;
 
+		// H 행렬에서 주변화 하려는 
 		MatXX HtmpRow = HM.block(io,0,8,odim);
 		MatXX botRowsTmp = HM.bottomRows(ntail);
 		HM.block(io,0,ntail,odim) = botRowsTmp;
@@ -758,10 +787,10 @@ void EnergyFunctional::orthogonalize(VecX* b, MatXX* H)
 	// N pseudo inverse
 	MatXX Npi = svdNN.matrixU() * SNN.asDiagonal() * svdNN.matrixV().transpose(); 	// [dim] x 9.
 	MatXX NNpiT = N*Npi.transpose(); 	// [dim] x [dim].
-	MatXX NNpiTS = 0.5*(NNpiT + NNpiT.transpose());	// = N * (N' * N)^-1 * N'.
+	MatXX NNpiTS = 0.5*(NNpiT + NNpiT.transpose());	// = N * (N' * N)^-1 * N' = P_N (projection to N)
 
-	if(b!=0) *b -= NNpiTS * *b;
-	if(H!=0) *H -= NNpiTS * *H * NNpiTS;
+	if(b!=0) *b -= NNpiTS * *b;			 // (I-P)b=b-Pb
+	if(H!=0) *H -= NNpiTS * *H * NNpiTS; // (I-P)H(I-P) = H-PHP, 따라서 맞음.
 
 
 //	std::cout << std::setprecision(16) << "Orth SV: " << SNN.reverse().transpose() << "\n";
@@ -775,27 +804,33 @@ void EnergyFunctional::orthogonalize(VecX* b, MatXX* H)
 
 void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* HCalib)
 {
-	if(setting_solverMode & SOLVER_USE_GN) lambda=0;
-	if(setting_solverMode & SOLVER_FIX_LAMBDA) lambda = 1e-5;
+	if(setting_solverMode & SOLVER_USE_GN) lambda=0;          // false
+	if(setting_solverMode & SOLVER_FIX_LAMBDA) lambda = 1e-5; // false
 
 	assert(EFDeltaValid);
 	assert(EFAdjointsValid);
 	assert(EFIndicesValid);
 
-	MatXX HL_top, HA_top, H_sc;
-	VecX  bL_top, bA_top, bM_top, b_sc;
+	// H = H_active + H_linearized + H_marginalized
+	// b = b_active + b_linearized + b_marginalized
+	MatXX HL_top, HA_top, H_sc; // H_linearized, H_active, H_schur_complement
+	VecX  bL_top, bA_top, bM_top, b_sc; // b_active, b_linearized, b_marginalized
 
+	// 1. 활성(Active) 잔차로부터 H_A와 b_A를 누적합니다. (현재 선형화 지점에서의 정보)
 	accumulateAF_MT(HA_top, bA_top,multiThreading);
 
-
+	// 2. 선형화된(Linearized) 잔차로부터 H_L과 b_L을 누적합니다. (이전 선형화 지점 정보 재사용)
 	accumulateLF_MT(HL_top, bL_top,multiThreading);
 
-
-
+	// 3. 포인트(depth) 부분을 주변화(marginalize)하기 위한 슈어 보수(Schur Complement) 항을 계산합니다.
+	// H_sc = H_cp * H_pp^-1 * H_pc
+	// b_sc = H_cp * H_pp^-1 * b_p
 	accumulateSCF_MT(H_sc, b_sc,multiThreading);
 
 
 
+	// 4. 주변화된(Marginalized) 프레임들의 사전 정보(Prior)를 현재 상태에 맞게 업데이트합니다.
+	// b_M = b_prior + H_prior * (x_current - x_linearization)
 	bM_top = (bM+ HM * getStitchedDeltaF());
 
 
@@ -807,7 +842,7 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 	MatXX HFinal_top;
 	VecX bFinal_top;
 
-	if(setting_solverMode & SOLVER_ORTHOGONALIZE_SYSTEM)
+	if(setting_solverMode & SOLVER_ORTHOGONALIZE_SYSTEM) // false
 	{
 		// have a look if prior is there.
 		bool haveFirstFrame = false;
@@ -838,15 +873,21 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 	}
 	else
 	{
-
-
+		// 모든 헤시안과 b-벡터를 합산하여 카메라 포즈에 대한 전체 시스템을 구성합니다.
+		// H_top = H_cc (카메라-카메라 부분)
 		HFinal_top = HL_top + HM + HA_top;
+		// b_top = b_c - H_cp * H_pp^-1 * b_p
 		bFinal_top = bL_top + bM_top + bA_top - b_sc;
 
+		// 로깅을 위해 슈어 보수가 적용되기 전의 H와 b를 저장합니다.
 		lastHS = HFinal_top - H_sc;
 		lastbS = bFinal_top;
 
+		// LM 알고리즘: H_top의 대각선에 람다를 더하여 damping을 적용합니다.
 		for(int i=0;i<8*nFrames+CPARS;i++) HFinal_top(i,i) *= (1+lambda);
+
+		// 최종적으로 슈어 보수 항을 빼서 카메라 포즈에 대한 최종 H 행렬을 완성합니다.
+		// H_camera = H_cc - H_cp * (H_pp + lambda*I)^-1 * H_pc
 		HFinal_top -= H_sc * (1.0f/(1+lambda));
 	}
 
@@ -854,10 +895,11 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 
 
 
-
+	// 4. 축소된 선형 시스템 풀이 (카메라 포즈 & 파라미터에 대한 업데이트 스텝 x 계산)
 	VecX x;
 	if(setting_solverMode & SOLVER_SVD)
 	{
+		/*************(SVD를 이용한 풀이, 생략)*************/
 		VecX SVecI = HFinal_top.diagonal().cwiseSqrt().cwiseInverse();
 		MatXX HFinalScaled = SVecI.asDiagonal() * HFinal_top * SVecI.asDiagonal();
 		VecX bFinalScaled  = SVecI.asDiagonal() * bFinal_top;
@@ -888,6 +930,8 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 	}
 	else
 	{
+		// 수치적 안정성을 위해 H를 스케일링(Jacobi Preconditioning)한 후,
+		// LDLT 분해를 이용하여 Hx=b를 푼다.
 		VecX SVecI = (HFinal_top.diagonal()+VecX::Constant(HFinal_top.cols(), 10)).cwiseSqrt().cwiseInverse();
 		MatXX HFinalScaled = SVecI.asDiagonal() * HFinal_top * SVecI.asDiagonal();
 		x = SVecI.asDiagonal() * HFinalScaled.ldlt().solve(SVecI.asDiagonal() * bFinal_top);//  SVec.asDiagonal() * svd.matrixV() * Ub;
@@ -895,17 +939,25 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 
 
 
+	// 5. Gauge fix
+	// 계산 된 업데이트 스텝 x에서 영공간에 해당하는 부분 제거한다.
+	// 이를 통해 시스템의 절대적 위치/ 스케일이 발산하는 것을 막는다.
 	if((setting_solverMode & SOLVER_ORTHOGONALIZE_X) || (iteration >= 2 && (setting_solverMode & SOLVER_ORTHOGONALIZE_X_LATER)))
 	{
 		VecX xOld = x;
-		orthogonalize(&x, 0);
+		// 업데이트 스텝 'x'를 영공간에 직교하도록 투영하여 게이지를 고정합니다.
+		// H 행렬은 "이미 사용되었으므로" 수정할 필요가 없어 nullptr(0)을 전달합니다.
+		orthogonalize(&x, nullptr);
 	}
 
 
-	lastX = x;
+	lastX = x; // logging을 위해 촤종 업데이트 스텝 저장
 
 
 	//resubstituteF(x, HCalib);
+	// 6. 역치환(Back-substitution)
+	// 계산 된 카메라 업데이트트 스텝 x를 이용하여, 3D 포인트의 역깊이에 대한
+	// 업데이트트 스텝을 계산한다.
 	currentLambda= lambda;
 	resubstituteF_MT(x, HCalib,multiThreading);
 	currentLambda=0;
@@ -914,18 +966,18 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 }
 void EnergyFunctional::makeIDX()
 {
-	for(unsigned int idx=0;idx<frames.size();idx++)
+	for(unsigned int idx=0;idx<frames.size();idx++) // 새롭게 키프레임이 추가/제거 되었으므로 인덱스 새로 부여
 		frames[idx]->idx = idx;
 
 	allPoints.clear();
 
-	for(EFFrame* f : frames)
-		for(EFPoint* p : f->points)
+	for(EFFrame* f : frames)                     // 모든 활성 키프레임에서
+		for(EFPoint* p : f->points)              // EFPoint p로 특정해서,
 		{
-			allPoints.push_back(p);
-			for(EFResidual* r : p->residualsAll)
+			allPoints.push_back(p);              // EnergyFunctional의 allPoints에 등록
+			for(EFResidual* r : p->residualsAll) // residualsAll을 순회한다.
 			{
-				r->hostIDX = r->host->idx;
+				r->hostIDX = r->host->idx;       // 위에서 업데이트한 idx로 새로 host-target index 업데이트
 				r->targetIDX = r->target->idx;
 			}
 		}

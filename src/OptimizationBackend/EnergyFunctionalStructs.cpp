@@ -38,14 +38,22 @@ namespace dso
 
 void EFResidual::takeDataF()
 {
+	// J, data->J를 swap?
+	// data는 EFResidual이 가리키고 있는 PointFrameHessian을 의미한다.
+	// 더블 버퍼링 또는 포인터 스와핑이라고 불리는 최적화기법
+	// 최신화 된 J를 data로부터 가져오고, 현재 J는 다음에 data가 J를 계산할 때 (재)사용한다.( O(1) 시간)
 	std::swap<RawResidualJacobian*>(J, data->J);
 
-	Vec2f JI_JI_Jd = J->JIdx2 * J->Jpdd;
+	// Image gradient의 outer product(2x2)에 Jpdd(2x1)을 곱한다.
+	// Hessian을 구성하기 위한 subblock
+	Vec2f JI_JI_Jd = J->JIdx2 * J->Jpdd; // 그레디언트 outer product와 포인트를 inverse depth로 미분한 값을 행렬-벡터 곱한다.
 
 	for(int i=0;i<6;i++)
+	 	// Jpdxi=d[u]/d[xi]: (2x6), JI_JI_Jd: (2x1)
 		JpJdF[i] = J->Jpdxi[0][i]*JI_JI_Jd[0] + J->Jpdxi[1][i] * JI_JI_Jd[1];
+		//? JpJdF는 뭘까? -> Hessian에서 이미지점에 대한 포즈 $\xi$ 미분과 잔차에 깊이에 대한 미분의 곱셈
 
-	JpJdF.segment<2>(6) = J->JabJIdx*J->Jpdd;
+	JpJdF.segment<2>(6) = J->JabJIdx*J->Jpdd;// 6번째 원소부터 2개를 우변과 같이 설정한다; photometric calibration(a,b)에 대한 항이다.
 }
 
 
@@ -81,7 +89,7 @@ void EFPoint::takeData()
 	priorF = data->hasDepthPrior ? setting_idepthFixPrior*SCALE_IDEPTH*SCALE_IDEPTH : 0;
 	if(setting_solverMode & SOLVER_REMOVE_POSEPRIOR) priorF=0;
 
-	deltaF = data->idepth-data->idepth_zero;
+	deltaF = data->idepth-data->idepth_zero; // current depth - first estimate depth
 }
 
 

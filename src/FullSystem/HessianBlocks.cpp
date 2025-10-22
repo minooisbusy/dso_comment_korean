@@ -70,26 +70,33 @@ void PointHessian::release()
 	residuals.clear();
 }
 
+/** 
+ * @brief 
+*/
 
 void FrameHessian::setStateZero(const Vec10 &state_zero)
 {
-	// 이걸 보면 분명히 state_zero는 xi가 zero-vector이여야 한다.
 	assert(state_zero.head<6>().squaredNorm() < 1e-20);
 
 	this->state_zero = state_zero;
 
 
-	// Process Adjoint in Camera frame (Ad_{C}e_i)
+	// Numerically compute the Jacobian of the frame's local pose update
+	// with respect to a global SE(3) transformation. This is equivalent to
+	// computing how a global perturbation affects the local pose parameterization.
+	// The result is used to construct the nullspace basis for gauge fixing.
 	const double h = 1e-3; // Small perturbation
 	for(int i=0;i<6;i++)
 	{
 		Vec6 eps; eps.setZero(); eps[i] = h;
 		SE3 EepsP = Sophus::SE3::exp(eps);
 		SE3 EepsM = Sophus::SE3::exp(-eps);
-		SE3 w2c_leftEps_P_x0 = (get_worldToCam_evalPT() * EepsP) * get_worldToCam_evalPT().inverse(); // 좌표계를 선형화지점으로 바꾼 뒤 미소 변화(positive epsilon)를 표현한다. 
+		// Transform global perturbation into the local frame of the linearization point.
+		// This is equivalent to: Ad_{T_wc_eval.inverse()} * eps
+		SE3 w2c_leftEps_P_x0 = (get_worldToCam_evalPT() * EepsP) * get_worldToCam_evalPT().inverse(); 
 		SE3 w2c_leftEps_M_x0 = (get_worldToCam_evalPT() * EepsM) * get_worldToCam_evalPT().inverse();
-		//?? 선형화 지점에서 adjoint의 차분..? 어떤의미지
-		// Log는 tangential space(벡터)로 매핑
+		// Take the logarithm to map from the SE(3) group to the se(3) Lie algebra (a 6-vector),
+		// then perform central difference to get the derivative.
 		nullspaces_pose.col(i) = (w2c_leftEps_P_x0.log() - w2c_leftEps_M_x0.log())/(2*h); // numerical differentiation
 	}
 	//nullspaces_pose.topRows<3>() *= SCALE_XI_TRANS_INVERSE;
@@ -102,7 +109,7 @@ void FrameHessian::setStateZero(const Vec10 &state_zero)
 	SE3 w2c_leftEps_M_x0 = (get_worldToCam_evalPT());
 	w2c_leftEps_M_x0.translation() /= 1.00001;
 	w2c_leftEps_M_x0 = w2c_leftEps_M_x0 * get_worldToCam_evalPT().inverse();
-	nullspaces_scale = (w2c_leftEps_P_x0.log() - w2c_leftEps_M_x0.log())/(2e-3);
+	nullspaces_scale = (w2c_leftEps_P_x0.log() - w2c_leftEps_M_x0.log())/(2e-3); // translation...?
 
 
 	nullspaces_affine.setZero();
@@ -194,19 +201,19 @@ void FrameHessian::makeImages(float* color, CalibHessian* HCalib)
 		}
 	}
 }
-
+// 호스트와 타겟의 기하학적 관계를 미리 설정한다. 
 void FrameFramePrecalc::set(FrameHessian* host, FrameHessian* target, CalibHessian* HCalib )
 {
 	this->host = host;
 	this->target = target;
 
-	SE3 leftToLeft_0 = target->get_worldToCam_evalPT() * host->get_worldToCam_evalPT().inverse();
-	PRE_RTll_0 = (leftToLeft_0.rotationMatrix()).cast<float>();
-	PRE_tTll_0 = (leftToLeft_0.translation()).cast<float>();
+	SE3 leftToLeft_0 = target->get_worldToCam_evalPT() * host->get_worldToCam_evalPT().inverse(); // host to target with evaluation point
+	PRE_RTll_0 = (leftToLeft_0.rotationMatrix()).cast<float>(); // Tll은 Transformation from left to left, _0은 선형화 지점
+	PRE_tTll_0 = (leftToLeft_0.translation()).cast<float>();    // stereo system을 고려해서 좌측 카메라에서 다음 상태의 좌측 카메라로 이동을 뜻함
 
 
 
-	SE3 leftToLeft = target->PRE_worldToCam * host->PRE_camToWorld;
+	SE3 leftToLeft = target->PRE_worldToCam * host->PRE_camToWorld; // host to target with current state
 	PRE_RTll = (leftToLeft.rotationMatrix()).cast<float>();
 	PRE_tTll = (leftToLeft.translation()).cast<float>();
 	distanceLL = leftToLeft.translation().norm();

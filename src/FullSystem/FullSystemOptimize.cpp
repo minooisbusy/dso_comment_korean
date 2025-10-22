@@ -49,28 +49,36 @@ namespace dso
 
 
 
+// Active Residuals에 대해 에너지와 Jacobian을 계산하여 선형화를 수행 한다.
 void FullSystem::linearizeAll_Reductor(bool fixLinearization, std::vector<PointFrameResidual*>* toRemove, int min, int max, Vec10* stats, int tid)
 {
 	for(int k=min;k<max;k++)
 	{
-		PointFrameResidual* r = activeResiduals[k];
-		(*stats)[0] += r->linearize(&Hcalib);
+		/******************01. Linearize a residual(factor)*******************/
+		// 모든 잔차 r을 탐색하고 선형화를 수행한다.
+		PointFrameResidual* r = activeResiduals[k]; // fullsystem::optimize()에서 선형화 되지 않은 k번째 잔차 를 가져옴
+		// 모든 에너지 항은 *status[0]에 누적 된다.
+		// 선형화 함수는 최하위 수준의 오차함수의 다양한 Jacobian 계산하고 J에 집어넣는다. 
+		// 또한 에너지도 계산하기 때문에 리턴 값으로 energyLeft를 리턴함
+		(*stats)[0] += r->linearize(&Hcalib); // Compute sub-blocks of J to combines with other parts
 
-		if(fixLinearization)
+		if(fixLinearization) // 현재 call에서는 false, 최적화가 한 스텝 진행 된 후 호출 된다.
 		{
-			r->applyRes(true);
+			r->applyRes(true); // d[u]/d[xi]*d[r]/d[idepth]를 계산하고, 상태를 최신화한다.
 
-			if(r->efResidual->isActive())
+			if(r->efResidual->isActive()) // isActiveAndGoodNew를 리턴함.
 			{
 				if(r->isNew)
 				{
 					PointHessian* p = r->point;
-					Vec3f ptp_inf = r->host->targetPrecalc[r->target->idx].PRE_KRKiTll * Vec3f(p->u,p->v, 1);	// projected point assuming infinite depth.
-					Vec3f ptp = ptp_inf + r->host->targetPrecalc[r->target->idx].PRE_KtTll*p->idepth_scaled;	// projected point with real depth.
-					float relBS = 0.01*((ptp_inf.head<2>() / ptp_inf[2])-(ptp.head<2>() / ptp[2])).norm();	// 0.01 = one pixel.
+					Vec3f ptp_inf = r->host->targetPrecalc[r->target->idx].PRE_KRKiTll * Vec3f(p->u,p->v, 1);	// projected point assuming infinite depth. KRKip
+					Vec3f ptp = ptp_inf + r->host->targetPrecalc[r->target->idx].PRE_KtTll*p->idepth_scaled;	// projected point with real depth. KRKip+rho*t
+					// parallax on image plane
+					float relBS = 0.01*((ptp_inf.head<2>() / ptp_inf[2])-(ptp.head<2>() / ptp[2])).norm();	// 0.01 = one pixel. 
 
-
-					if(relBS > p->maxRelBaseline)
+					
+					// Update maxRelBaseline variable with bigger value 
+					if(relBS > p->maxRelBaseline) 
 						p->maxRelBaseline = relBS;
 
 					p->numGoodResiduals++;
@@ -90,6 +98,8 @@ void FullSystem::applyRes_Reductor(bool copyJacobians, int min, int max, Vec10* 
 	for(int k=min;k<max;k++)
 		activeResiduals[k]->applyRes(true);
 }
+
+// `newFrame`의 에너지 임계치를 현재 잔차 에너지에 따라 동적으로 설정한다.
 void FullSystem::setNewFrameEnergyTH()
 {
 
@@ -99,9 +109,9 @@ void FullSystem::setNewFrameEnergyTH()
 	FrameHessian* newFrame = frameHessians.back();
 
 	for(PointFrameResidual* r : activeResiduals)
-		if(r->state_NewEnergyWithOutlier >= 0 && r->target == newFrame)
+		if(r->state_NewEnergyWithOutlier >= 0 && r->target == newFrame) // target이 newFrame이고, 에너지(패턴 잔차의합)가 양수인 경우
 		{
-			allResVec.push_back(r->state_NewEnergyWithOutlier);
+			allResVec.push_back(r->state_NewEnergyWithOutlier); // 잔차를 하나씩 추가한다.
 
 		}
 
@@ -112,23 +122,25 @@ void FullSystem::setNewFrameEnergyTH()
 	}
 
 
-	int nthIdx = setting_frameEnergyTHN*allResVec.size();
+	int nthIdx = setting_frameEnergyTHN*allResVec.size(); // 0.7f x 잔차 개수 => 잔차 개수 중 약 70%에서 잔차
 
-	assert(nthIdx < (int)allResVec.size());
-	assert(setting_frameEnergyTHN < 1);
+	assert(nthIdx < (int)allResVec.size()); // 0에서 1 사이이므로 무조건 작아야함
+	assert(setting_frameEnergyTHN < 1);     // 1 이하여야함.
 
-	std::nth_element(allResVec.begin(), allResVec.begin()+nthIdx, allResVec.end());
-	float nthElement = sqrtf(allResVec[nthIdx]);
-
-
+	std::nth_element(allResVec.begin(), allResVec.begin()+nthIdx, allResVec.end()); // 잔차의 위치 찾기
+	float nthElement = sqrtf(allResVec[nthIdx]); // 에너지의 제곱근
 
 
 
 
-    newFrame->frameEnergyTH = nthElement*setting_frameEnergyTHFacMedian;
-	newFrame->frameEnergyTH = 26.0f*setting_frameEnergyTHConstWeight + newFrame->frameEnergyTH*(1-setting_frameEnergyTHConstWeight);
-	newFrame->frameEnergyTH = newFrame->frameEnergyTH*newFrame->frameEnergyTH;
-	newFrame->frameEnergyTH *= setting_overallEnergyTHWeight*setting_overallEnergyTHWeight;
+
+
+	//! Maybe this shit is totally hard corded.
+    newFrame->frameEnergyTH = nthElement*setting_frameEnergyTHFacMedian; // sqrt(70%energy) * 1.5f
+	newFrame->frameEnergyTH = 26.0f*setting_frameEnergyTHConstWeight // 26.0f * 0.5f, 26.0f is experimentally choose.
+							  + newFrame->frameEnergyTH*(1-setting_frameEnergyTHConstWeight); // energy * 0.5f => mean or weighted sum
+	newFrame->frameEnergyTH = newFrame->frameEnergyTH*newFrame->frameEnergyTH; // square; 에너지는 제곱의 꼴이다.
+	newFrame->frameEnergyTH *= setting_overallEnergyTHWeight*setting_overallEnergyTHWeight; // squared value(But it's 1.0f)
 
 
 
@@ -145,56 +157,65 @@ Vec3 FullSystem::linearizeAll(bool fixLinearization)
 	double lastEnergyR = 0;
 	double num = 0;
 
-
+	// 주변화 할 잔차? NUM_THREADS = 6
 	std::vector<PointFrameResidual*> toRemove[NUM_THREADS];
 	for(int i=0;i<NUM_THREADS;i++) toRemove[i].clear();
 
-	if(multiThreading)
+	// 아래에서는 직/병렬에 따라 linearize_all_Reductor를 실행는는하느데, fixLinearlization이 false이므로,
+	// 앞선 호출에서 채워진 `activeResiduals`에서 하나의 잔차를 선형화 한다.
+	if(multiThreading) // 병렬 처리의 경우
 	{
+		// 원자 함수인 linearizeAll_Reducer를 병렬로 실행함: 활성화 된 잔차의 개수만큼 Jacobian subblocks 계산
 		treadReduce.reduce(boost::bind(&FullSystem::linearizeAll_Reductor, this, fixLinearization, toRemove, _1, _2, _3, _4), 0, activeResiduals.size(), 0);
 		lastEnergyP = treadReduce.stats[0];
 	}
-	else
+	else // 직렬처리의 경우
 	{
 		Vec10 stats;
+		// min = 0, max = activaResidual.size()
 		linearizeAll_Reductor(fixLinearization, toRemove, 0,activeResiduals.size(),&stats,0);
 		lastEnergyP = stats[0];
 	}
 
 
-	setNewFrameEnergyTH();
+	setNewFrameEnergyTH(); // newFrame의 에너지 임계치를 현재 잔차 에너지에 기반하여 동적으로로 설정한다.
 
 
-	if(fixLinearization)
+	if(fixLinearization) // 현재 call에서는 false
 	{
-
+		// Finalize the state of residuals after optimization is complete.
+		// Update the tracking status of each point based on its latest residuals.
 		for(PointFrameResidual* r : activeResiduals)
 		{
 			PointHessian* ph = r->point;
-			if(ph->lastResiduals[0].first == r)
+			// Update the state of the last two residuals for each point.
+			// This information is used by PointHessian::isOOB to decide if the point should be marginalized.
+			if(ph->lastResiduals[0].first == r) // pair; first: PointFrameResidual, second: resState
 				ph->lastResiduals[0].second = r->state_state;
 			else if(ph->lastResiduals[1].first == r)
 				ph->lastResiduals[1].second = r->state_state;
-
-
-
 		}
 
+		// Permanently remove residuals that were marked as OUTLIER or OOB.
+		// These were collected in the 'toRemove' vector during the final linearization step.
 		int nResRemoved=0;
 		for(int i=0;i<NUM_THREADS;i++)
 		{
 			for(PointFrameResidual* r : toRemove[i])
 			{
 				PointHessian* ph = r->point;
-
+				
+				// Clear references to the removed residual from the point's tracking history.
 				if(ph->lastResiduals[0].first == r)
 					ph->lastResiduals[0].first=0;
 				else if(ph->lastResiduals[1].first == r)
 					ph->lastResiduals[1].first=0;
 
+				// Find and remove the residual from the point's list of observations.
 				for(unsigned int k=0; k<ph->residuals.size();k++)
 					if(ph->residuals[k] == r)
 					{
+						// Drop from the main energy functional and delete the object.
 						ef->dropResidual(r->efResidual);
 						deleteOut<PointFrameResidual>(ph->residuals,k);
 						nResRemoved++;
@@ -202,11 +223,9 @@ Vec3 FullSystem::linearizeAll(bool fixLinearization)
 					}
 			}
 		}
-		//printf("FINAL LINEARIZATION: removed %d / %d residuals!\n", nResRemoved, (int)activeResiduals.size());
-
 	}
 
-	return Vec3(lastEnergyP, lastEnergyR, num);
+	return Vec3(lastEnergyP, lastEnergyR, num); // lastEnergyR은 0인채로 남는다. 활성포인트의 전체 에너지와 개수를 리턴한다.
 }
 
 
@@ -313,7 +332,7 @@ bool FullSystem::doStepFromBackup(float stepfacC,float stepfacT,float stepfacR,f
 // sets linearization point.
 void FullSystem::backupState(bool backupLastStep)
 {
-	if(setting_solverMode & SOLVER_MOMENTUM)
+	if(setting_solverMode & SOLVER_MOMENTUM) // 0x0880 & 0x0200 = 0 -> false
 	{
 		if(backupLastStep)
 		{
@@ -348,10 +367,10 @@ void FullSystem::backupState(bool backupLastStep)
 	}
 	else
 	{
-		Hcalib.value_backup = Hcalib.value;
+		Hcalib.value_backup = Hcalib.value; // Hcalib을 저장해준다.
 		for(FrameHessian* fh : frameHessians)
 		{
-			fh->state_backup = fh->get_state();
+			fh->state_backup = fh->get_state(); // backup
 			for(PointHessian* ph : fh->pointHessians)
 				ph->idepth_backup = ph->idepth;
 		}
@@ -379,10 +398,11 @@ void FullSystem::loadSateBackup()
 	setPrecalcValues();
 }
 
-
+// `calc`ulate `M`arginalized `Energy`
 double FullSystem::calcMEnergy()
 {
 	if(setting_forceAceptStep) return 0;
+	// 아래 계산은 뭘까?
 	// calculate (x-x0)^T * [2b + H * (x-x0)] for everything saved in L.
 	//ef->makeIDX();
 	//ef->setDeltaF(&Hcalib);
@@ -404,12 +424,13 @@ void FullSystem::printOptRes(const Vec3 &res, double resL, double resM, double r
 
 }
 
-
+/********** 슬라이딩 윈도우 안에 있는 키프레임에 GN 최적화**********/
+//* makeKeyFrame에서만 호출 된다.
 float FullSystem::optimize(int mnumOptIts)
 {
 
-	if(frameHessians.size() < 2) return 0;
-	if(frameHessians.size() < 3) mnumOptIts = 20;
+	if(frameHessians.size() < 2) return 0;        // 2개 이하면 pair 조차 이룰 수 없다.
+	if(frameHessians.size() < 3) mnumOptIts = 20; // 아마도 실험적으로 정한 값
 	if(frameHessians.size() < 4) mnumOptIts = 15;
 
 
@@ -418,38 +439,50 @@ float FullSystem::optimize(int mnumOptIts)
 
 
 	// get statistics and active residuals.
-
+	// 선형화 되지 않은 잔차를 activeResiduals 컨테이너에 추가함.
 	activeResiduals.clear();
 	int numPoints = 0;
 	int numLRes = 0;
+
+	// 모든 활성 키프레임에 대해 각 프레임에서 선형화 되지 않은 점들을 `activeResiduals`에 추가한다.
 	for(FrameHessian* fh : frameHessians)
 		for(PointHessian* ph : fh->pointHessians)
 		{
+			// 모든 잔차를 탐색한다.
 			for(PointFrameResidual* r : ph->residuals)
 			{
+				// r->efResidual에서 선형화 되지 않은 잔차만을 추가함.
 				if(!r->efResidual->isLinearized)
 				{
-					activeResiduals.push_back(r);
-					r->resetOOB();
+					activeResiduals.push_back(r); // 선형화 되지 않은 경우 활성잔차에 추가한다.
+					r->resetOOB(); // PointFrameResidual r의 에너지를 0으로, 
+								   //state_state를 IN으로, state_Newstate를 Outlier로 설정함.
+								   // state_state를 IN으로 설정하는 이유는, 다시 사용 가능한지 보기 위함이다..?
+								   //? state_Newstate를 Outlier로 하는이유는? applyRes()에서 바로 사용하지 않기 위해?
 				}
 				else
-					numLRes++;
+					numLRes++; // 선형화 된 잔차 개수 ++
 			}
-			numPoints++;
+			numPoints++; // 전체 점 ++
 		}
 
     if(!setting_debugout_runquiet)
         printf("OPTIMIZE %d pts, %d active res, %d lin res!\n",ef->nPoints,(int)activeResiduals.size(), numLRes);
 
 
-	Vec3 lastEnergy = linearizeAll(false);
-	double lastEnergyL = calcLEnergy();
-	double lastEnergyM = calcMEnergy();
+	// 모든 활성 잔차 오류와 "야코비안"을 계산. false는 고정된 선형화가 없음을 의미함.
+	Vec3 lastEnergy = linearizeAll(false); // 잔차를 선형화 하고, 예상되는 새로운 상태(정상? 이상치? 영상에 투영되지 않음?)만 지정한다.
+
+	/* setting_forceAcceptStep이 true이므로, 아래 두 함수는 0을 리턴한다.*/
+	// 주변화 되어야하는 모든 잔차 에너지의 합
+	double lastEnergyL = calcLEnergy(); // calculate Last Energy? setting_forceAceptStep가 true이기에 0을 리턴함.
+	// 주변화 후 남은 사전 에너지(여기서 에너지는 선형화되었고 선형화 지점이 고정되었음을 유의)
+	double lastEnergyM = calcMEnergy(); // 위와 같이 0을 리턴함
 
 
 
 
-
+	// 모든 활성 잔차에 대해 Jacobian을 최신화 한다.
 	if(multiThreading)
 		treadReduce.reduce(boost::bind(&FullSystem::applyRes_Reductor, this, true, _1, _2, _3, _4), 0, activeResiduals.size(), 50);
 	else
@@ -472,7 +505,7 @@ float FullSystem::optimize(int mnumOptIts)
 	for(int iteration=0;iteration<mnumOptIts;iteration++)
 	{
 		// solve!
-		backupState(iteration!=0);
+		backupState(iteration!=0); // intriniscs, pose, ab, idepth를 backup
 		//solveSystemNew(0);
 		solveSystem(iteration, lambda);
 		double incDirChange = (1e-20 + previousX.dot(ef->lastX)) / (1e-20 + previousX.norm() * ef->lastX.norm());
@@ -607,7 +640,7 @@ float FullSystem::optimize(int mnumOptIts)
 
 void FullSystem::solveSystem(int iteration, double lambda)
 {
-	ef->lastNullspaces_forLogging = getNullspaces(
+	ef->lastNullspaces_forLogging = getNullspaces(// 아래 인자들에 저장 된다.
 			ef->lastNullspaces_pose,
 			ef->lastNullspaces_scale,
 			ef->lastNullspaces_affA,
@@ -617,12 +650,12 @@ void FullSystem::solveSystem(int iteration, double lambda)
 }
 
 
-
+// calculate `L`inearized Energy
 double FullSystem::calcLEnergy()
 {
 	if(setting_forceAceptStep) return 0;
 
-	double Ef = ef->calcLEnergyF_MT();
+	double Ef = ef->calcLEnergyF_MT(); // MT : Multi-Threaded, 내부에서 red->reduce를 사용함.
 	return Ef;
 
 }
@@ -661,33 +694,46 @@ std::vector<VecX> FullSystem::getNullspaces(
 		std::vector<VecX> &nullspaces_affA,
 		std::vector<VecX> &nullspaces_affB)
 {
+	// 1. 출력벡ㅌ터들을 초기화 한다.
 	nullspaces_pose.clear();
 	nullspaces_scale.clear();
 	nullspaces_affA.clear();
 	nullspaces_affB.clear();
 
 
+	// 2. 전체 상태 변수의 차원을 계산한다.
+	// CPARS: 카메라 내부 파라미터 (4), frameHessian.size()*8: 각 키프레임의 (포즈(6) + 광도(2))
 	int n=CPARS+frameHessians.size()*8;
-	std::vector<VecX> nullspaces_x0_pre;
+	std::vector<VecX> nullspaces_x0_pre; // 모든 영공간 벡터를 담을 임시 벡터
+
+	// 3. pose에 대해 6개의 기저 벡터 계산
 	for(int i=0;i<6;i++)
 	{
 		VecX nullspace_x0(n);
 		nullspace_x0.setZero();
+		// 모든 활성 키프레임에 대해
 		for(FrameHessian* fh : frameHessians)
 		{
-			nullspace_x0.segment<6>(CPARS+fh->idx*8) = fh->nullspaces_pose.col(i);
-			nullspace_x0.segment<3>(CPARS+fh->idx*8) *= SCALE_XI_TRANS_INVERSE;
-			nullspace_x0.segment<3>(CPARS+fh->idx*8+3) *= SCALE_XI_ROT_INVERSE;
+			// 각 프레임에 대한 지역적인(local) 영공간 성분(fh->nullspaces_pose)을 가져와
+			// 전체 상태 벡터의 해당 위치에 "조립(stitch)"한다.
+			// fh->nullspaces_pose는 FrameHessian::setStateZero에서 수치 미분으로로 계산된다.
+			nullspace_x0.segment<6>(CPARS+fh->idx*8) = fh->nullspaces_pose.col(i); // CPAR+fh->idx*8개번재에서부터, 6개,
+																				   // 미리 FrameHessian::SetStateZero에서 계산한 포즈 영공간
+			// 최적화에 사용된 스케일을 다시 역으로로 적용한다.
+			nullspace_x0.segment<3>(CPARS+fh->idx*8) *= SCALE_XI_TRANS_INVERSE;    // 그 여섯 개 중 앞에 3개에 스케일링
+			nullspace_x0.segment<3>(CPARS+fh->idx*8+3) *= SCALE_XI_ROT_INVERSE;    // 그 여섯 개 중 뒤에 3개에 스케일링
 		}
-		nullspaces_x0_pre.push_back(nullspace_x0);
-		nullspaces_pose.push_back(nullspace_x0);
+		nullspaces_x0_pre.push_back(nullspace_x0); // 
+		nullspaces_pose.push_back(nullspace_x0);   // 
 	}
+	// 4. Affine 파라미터(a, b)에 대한 2 개의 영공간 기저 벡터 계산
 	for(int i=0;i<2;i++)
 	{
 		VecX nullspace_x0(n);
 		nullspace_x0.setZero();
 		for(FrameHessian* fh : frameHessians)
 		{
+			// 각 프레임의 광도 파라미터(a, b)에 대한 영공간 성분을 조립한다.
 			nullspace_x0.segment<2>(CPARS+fh->idx*8+6) = fh->nullspaces_affine.col(i).head<2>();
 			nullspace_x0[CPARS+fh->idx*8+6] *= SCALE_A_INVERSE;
 			nullspace_x0[CPARS+fh->idx*8+7] *= SCALE_B_INVERSE;
@@ -697,11 +743,14 @@ std::vector<VecX> FullSystem::getNullspaces(
 		if(i==1) nullspaces_affB.push_back(nullspace_x0);
 	}
 
+	// 5. Scale에 대한 1 개의 기저 벡터 계산
 	VecX nullspace_x0(n);
 	nullspace_x0.setZero();
+	// scale의 nullspace
 	for(FrameHessian* fh : frameHessians)
 	{
-		nullspace_x0.segment<6>(CPARS+fh->idx*8) = fh->nullspaces_scale;
+		// 각 프레임의 포즈에 대한 스케일 영공간 성분을 조립한다.
+		nullspace_x0.segment<6>(CPARS+fh->idx*8) = fh->nullspaces_scale;    // translation 변화에 따른 pose(6)의 스케일 영공간
 		nullspace_x0.segment<3>(CPARS+fh->idx*8) *= SCALE_XI_TRANS_INVERSE;
 		nullspace_x0.segment<3>(CPARS+fh->idx*8+3) *= SCALE_XI_ROT_INVERSE;
 	}

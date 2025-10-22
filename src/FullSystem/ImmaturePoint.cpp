@@ -73,6 +73,7 @@ ImmaturePoint::~ImmaturePoint()
  * * UPDATED -> point has been updated.
  * * SKIP -> point has not been updated.
  */
+// traceOn()은 단 하나의 점을 처리한다.
 ImmaturePointStatus ImmaturePoint::traceOn(FrameHessian* frame,const Mat33f &hostToFrame_KRKi, const Vec3f &hostToFrame_Kt, const Vec2f& hostToFrame_affine, CalibHessian* HCalib, bool debugPrint)
 {
 	// OOB means probably 'Out-of-Bound' <= search range is too large <=> uncertainty is too large => Can't be converged with this method => Can't be converged with this method
@@ -455,7 +456,7 @@ float ImmaturePoint::getdPixdd(
 
 
 float ImmaturePoint::calcResidual(
-		CalibHessian *  HCalib, const float outlierTHSlack,
+		CalibHessian *  HCalib, const float outlierTHSlack, // 첫 번째 사용에서 1000으로 지정
 		ImmaturePointTemporaryResidual* tmpRes,
 		float idepth)
 {
@@ -483,7 +484,7 @@ float ImmaturePoint::calcResidual(
 		energyLeft += weights[idx]*weights[idx]*hw *residual*residual*(2-hw);
 	}
 
-	if(energyLeft > energyTH*outlierTHSlack)
+	if(energyLeft > energyTH*outlierTHSlack) // cut-off
 	{
 		energyLeft = energyTH*outlierTHSlack;
 	}
@@ -500,7 +501,7 @@ double ImmaturePoint::linearizeResidual(
 		float idepth)
 {
 	if(tmpRes->state_state == ResState::OOB)
-		{ tmpRes->state_NewState = ResState::OOB; return tmpRes->state_energy; }
+		{ tmpRes->state_NewState = ResState::OOB; return tmpRes->state_energy; } // state_energy는 0으로 초기화 됨, 누적에 영향 x
 
 	FrameFramePrecalc* precalc = &(host->targetPrecalc[tmpRes->target->idx]);
 
@@ -525,7 +526,7 @@ double ImmaturePoint::linearizeResidual(
 
 		if(!projectPoint(this->u,this->v, idepth, dx, dy,HCalib,
 				PRE_RTll,PRE_tTll, drescale, u, v, Ku, Kv, KliP, new_idepth))
-			{tmpRes->state_NewState = ResState::OOB; return tmpRes->state_energy;}
+			{tmpRes->state_NewState = ResState::OOB; return tmpRes->state_energy;} // state_energy는 0으로 초기화 됨, 누적에 영향 x
 
 
 		Vec3f hitColor = (getInterpolatedElement33(dIl, Ku, Kv, wG[0]));

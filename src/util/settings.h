@@ -38,8 +38,8 @@ namespace dso
 #define SOLVER_ORTHOGONALIZE_FULL (int)8
 #define SOLVER_SVD_CUT7 (int)16
 #define SOLVER_REMOVE_POSEPRIOR (int)32
-#define SOLVER_USE_GN (int)64
-#define SOLVER_FIX_LAMBDA (int)128
+#define SOLVER_USE_GN (int)64 // 0x0010
+#define SOLVER_FIX_LAMBDA (int)128 // 0x0100
 #define SOLVER_ORTHOGONALIZE_X (int)256
 #define SOLVER_MOMENTUM (int)512
 #define SOLVER_STEPMOMENTUM (int)1024

@@ -883,11 +883,11 @@ void CoarseDistanceMap::makeDistanceMap(
 	for(FrameHessian* fh : frameHessians)
 	{
 		if(frame == fh) continue;
-
+		// projection components
 		SE3 fhToNew = frame->PRE_worldToCam * fh->PRE_camToWorld;
 		Mat33f KRKi = (K[1] * fhToNew.rotationMatrix().cast<float>() * Ki[0]);
 		Vec3f Kt = (K[1] * fhToNew.translation().cast<float>());
-
+		
 		for(PointHessian* ph : fh->pointHessians)
 		{
 			assert(ph->status == PointHessian::ACTIVE);

@@ -72,7 +72,11 @@ public:
 	int neighbours[10];
 	float neighboursDist[10];
 
-	float my_type;
+	/**
+	 * @brief Point quality or weight, primarily based on image gradient magnitude.
+	 * A higher value indicates a more significant feature point.
+	 */
+	float my_type; 
 	float outlierTH;
 };
 
@@ -188,5 +192,3 @@ struct FLANNPointcloud
 };
 
 }
-
-

@@ -74,25 +74,36 @@ PointFrameResidual::PointFrameResidual(PointHessian* point_, FrameHessian* host_
 
 
 
-
+// Back-end 최적화에 사용되는 미분 준비
 double PointFrameResidual::linearize(CalibHessian* HCalib)
 {
 	state_NewEnergyWithOutlier=-1;
 
-	if(state_state == ResState::OOB)
+	if(state_state == ResState::OOB) // Out-of-Bound이면, 새로운 상태도 OOB로 설정하고, state_energy를 그대로 리턴
 		{ state_NewState = ResState::OOB; return state_energy; }
 
+	// 이 잔차에 해당하는 사전에 계산 된 값들을 가져온다.
+	// 값들은 KRKi, 현재 값에서 변환, 초기화 지점에서 변환 등을 포함한다.
+	//! adjoint는 등장하지 않음. 
+	//! 현재 계산은 -> 연쇄법칙의 local Jacobian
+	//! adHostF는 -> 연쇄법칙의 Global transformation matrix
 	FrameFramePrecalc* precalc = &(host->targetPrecalc[target->idx]);
 	float energyLeft=0;
-	const Eigen::Vector3f* dIl = target->dI;
+	const Eigen::Vector3f* dIl = target->dI; // target의 intensity, dx, dy 포인터 획득
 	//const float* const Il = target->I;
+	
+	// 사전에 계산 된 값들(precalc)에서 기하학적인 값들 가져옴
 	const Mat33f &PRE_KRKiTll = precalc->PRE_KRKiTll;
 	const Vec3f &PRE_KtTll = precalc->PRE_KtTll;
 	const Mat33f &PRE_RTll_0 = precalc->PRE_RTll_0;
 	const Vec3f &PRE_tTll_0 = precalc->PRE_tTll_0;
+
+	// 포인트의 밝기값
 	const float * const color = point->color;
+	// 포인트의 가중치, 아마도 수식 7번
 	const float * const weights = point->weights;
 
+	// 사전에 계산 된 값들(precalc)에서 광도 파라미터 갖고옴
 	Vec2f affLL = precalc->PRE_aff_mode;
 	float b0 = precalc->PRE_b0_mode;
 
@@ -101,25 +112,26 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 	Vec4f d_C_x, d_C_y;
 	float d_d_x, d_d_y;
 	{
-		float drescale, u, v, new_idepth;
+		float drescale, u, v, new_idepth; // u,v 는 normalized coordinate
 		float Ku, Kv;
 		Vec3f KliP;
 
+		// 보간을 고려한 이미지 영역 내부에 있는지 확인
 		if(!projectPoint(point->u, point->v, point->idepth_zero_scaled, 0, 0,HCalib,
 				PRE_RTll_0,PRE_tTll_0, drescale, u, v, Ku, Kv, KliP, new_idepth))
 			{ state_NewState = ResState::OOB; return state_energy; }
 
-		centerProjectedTo = Vec3f(Ku, Kv, new_idepth);
+		centerProjectedTo = Vec3f(Ku, Kv, new_idepth); // 
 
 
-		// diff d_idepth
+		// diff d_idepth, 깊이 값에 대해 u,v를 미분한 결과
 		d_d_x = drescale * (PRE_tTll_0[0]-PRE_tTll_0[2]*u)*SCALE_IDEPTH*HCalib->fxl();
 		d_d_y = drescale * (PRE_tTll_0[1]-PRE_tTll_0[2]*v)*SCALE_IDEPTH*HCalib->fyl();
 
 
 
 
-		// diff calib
+		// diff calib, intrinsics에 대해 u,v를 미분한 결과
 		d_C_x[2] = drescale*(PRE_RTll_0(2,0)*u-PRE_RTll_0(0,0));
 		d_C_x[3] = HCalib->fxl() * drescale*(PRE_RTll_0(2,1)*u-PRE_RTll_0(0,1)) * HCalib->fyli();
 		d_C_x[0] = KliP[0]*d_C_x[2];
@@ -130,6 +142,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 		d_C_y[0] = KliP[0]*d_C_y[2];
 		d_C_y[1] = KliP[1]*d_C_y[3];
 
+		// 스케일링
 		d_C_x[0] = (d_C_x[0]+u)*SCALE_F;
 		d_C_x[1] *= SCALE_F;
 		d_C_x[2] = (d_C_x[2]+1)*SCALE_C;
@@ -141,6 +154,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 		d_C_y[3] = (d_C_y[3]+1)*SCALE_C;
 
 
+		// pose twist에 대해 u,v 미분 결과
 		d_xi_x[0] = new_idepth*HCalib->fxl();
 		d_xi_x[1] = 0;
 		d_xi_x[2] = -new_idepth*u*HCalib->fxl();
@@ -157,13 +171,18 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 	}
 
 
+	// 결과를 RawResidualJacobian*에 저장. 예를 들어 Jpdxi는 point를 xi로 미분.
+	// J_p_d_* 형식. Jacobian point derivatived by *
 	{
+		// d[r]/d[xi]
 		J->Jpdxi[0] = d_xi_x;
 		J->Jpdxi[1] = d_xi_y;
 
+		// d[r]/d[c]
 		J->Jpdc[0] = d_C_x;
 		J->Jpdc[1] = d_C_y;
 
+		// d[r]/d[rho]
 		J->Jpdd[0] = d_d_x;
 		J->Jpdd[1] = d_d_y;
 
@@ -183,6 +202,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 	for(int idx=0;idx<patternNum;idx++)
 	{
 		float Ku, Kv;
+		// 패턴 위치에서 투영이 영상 경계 내에 있는지 확인
 		if(!projectPoint(point->u+patternP[idx][0], point->v+patternP[idx][1], point->idepth_scaled, PRE_KRKiTll, PRE_KtTll, Ku, Kv))
 			{ state_NewState = ResState::OOB; return state_energy; }
 
@@ -194,13 +214,14 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
         float residual = hitColor[0] - (float)(affLL[0] * color[idx] + affLL[1]);
 
 
-
-		float drdA = (color[idx]-b0);
+		// residual을 파라미터 a로 미분
+		float drdA = (color[idx]-b0); // alpha(host color - beta)가 원본이다.
 		if(!std::isfinite((float)hitColor[0]))
 		{ state_NewState = ResState::OOB; return state_energy; }
 
-
+		// 수식 7번의 가중치
 		float w = sqrtf(setting_outlierTHSumComponent / (setting_outlierTHSumComponent + hitColor.tail<2>().squaredNorm()));
+		// 
         w = 0.5f*(w + weights[idx]);
 
 
@@ -236,7 +257,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 			JabJab_11+= hw*hw;
 
 
-			wJI2_sum += hw*hw*(hitColor[1]*hitColor[1]+hitColor[2]*hitColor[2]);
+			wJI2_sum += hw*hw*(hitColor[1]*hitColor[1]+hitColor[2]*hitColor[2]); // some criteria..
 
 			if(setting_affineOptModeA < 0) J->JabF[0][idx]=0;
 			if(setting_affineOptModeB < 0) J->JabF[1][idx]=0;
@@ -303,6 +324,9 @@ void PointFrameResidual::debugPlot()
 
 
 
+/**
+ * @brief linearize()로 계산된 새로운 상태(NewState)를 현재 상태(state_state)로 적용
+ */
 void PointFrameResidual::applyRes(bool copyJacobians)
 {
 	if(copyJacobians)
@@ -312,18 +336,18 @@ void PointFrameResidual::applyRes(bool copyJacobians)
 			assert(!efResidual->isActiveAndIsGoodNEW);
 			return;	// can never go back from OOB
 		}
-		if(state_NewState == ResState::IN)// && )
+		if(state_NewState == ResState::IN)// Inlier인 경우,
 		{
 			efResidual->isActiveAndIsGoodNEW=true;
-			efResidual->takeDataF();
+			efResidual->takeDataF(); // 데이터 스왑 후(의미 모름), [u]/d[xi]와 d[r]/d[idepth]의 곱셈을 구한다.
 		}
 		else
 		{
-			efResidual->isActiveAndIsGoodNEW=false;
+			efResidual->isActiveAndIsGoodNEW=false; // OUTLIER의 경우일 것이다.
 		}
 	}
 
-	setState(state_NewState);
+	setState(state_NewState); // state_NewState를 현재 스테이트로 적용함(apply)
 	state_energy = state_NewEnergy;
 }
 }

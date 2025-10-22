@@ -100,7 +100,7 @@ struct FrameFramePrecalc
 
     inline ~FrameFramePrecalc() {}
     inline FrameFramePrecalc() {host=target=0;}
-	void set(FrameHessian* host, FrameHessian* target, CalibHessian* HCalib);
+	void set(FrameHessian* host, FrameHessian* target, CalibHessian* HCalib); // set host to target transformation
 };
 
 
@@ -147,9 +147,9 @@ struct FrameHessian
 
 	// variable info.
 	SE3 worldToCam_evalPT;
-	Vec10 state_zero;
-	Vec10 state_scaled;
-	Vec10 state;	// [0-5: worldToCam-leftEps. 6-7: a,b]
+	Vec10 state_zero;  // Linearization point
+	Vec10 state_scaled; 
+	Vec10 state;	// current state, [0-5: worldToCam-leftEps. 6-7: a,b, 8-9: ??]
 	Vec10 step;
 	Vec10 step_backup;
 	Vec10 state_backup;
@@ -187,7 +187,7 @@ struct FrameHessian
 		state_scaled[8] = SCALE_A * state[8];
 		state_scaled[9] = SCALE_B * state[9];
 
-		PRE_worldToCam = SE3::exp(w2c_leftEps()) * get_worldToCam_evalPT();
+		PRE_worldToCam = SE3::exp(w2c_leftEps()) * get_worldToCam_evalPT(); // w2c_leftEps() is incremental, so Pose is updated.
 		PRE_camToWorld = PRE_worldToCam.inverse();
 		//setCurrentNullspace();
 	};
@@ -218,11 +218,20 @@ struct FrameHessian
 
 
 	// WorldToCam_evalPT를 설정하여 선형화 지점 설정
+	// World-to-Host Transformation을 `worldToCam_evalPT`로 삼는다.
 	inline void setEvalPT_scaled(const SE3 &worldToCam_evalPT, const AffLight &aff_g2l)
 	{
+		// The state vector represents the delta from the linearization point.
+		// For a new keyframe, the pose delta is zero.
 		Vec10 initial_state = Vec10::Zero();
+		// [0-5]: Pose delta (se3)
+		// [6-7]: Affine brightness delta (a, b)
+		// [8-9]: Reserved
+
+		// Set the initial affine parameters from the coarse tracker.
 		initial_state[6] = aff_g2l.a;
 		initial_state[7] = aff_g2l.b;
+
 		this->worldToCam_evalPT = worldToCam_evalPT;
 		setStateScaled(initial_state); // Scale을 벗겨냄
 		setStateZero(this->get_state()); // state의 각 값의 nullspace column을 구한다.
@@ -308,10 +317,10 @@ struct CalibHessian
 	VecCf value_scaledf;
 	VecCf value_scaledi;
 	VecC value;
-	VecC step;
+	VecC step; // It implies that this struct is an optimization variable
 	VecC step_backup;
 	VecC value_backup;
-	VecC value_minus_value_zero;
+	VecC value_minus_value_zero; // 
 
     inline ~CalibHessian() {instanceCounter--;}
 	inline CalibHessian()
@@ -324,7 +333,7 @@ struct CalibHessian
 		initial_value[3] = cyG[0];
 
 		setValueScaled(initial_value);
-		value_zero = value;
+		value_zero = value; // just first estimate.
 		value_minus_value_zero.setZero();
 
 		instanceCounter++;
@@ -349,10 +358,10 @@ struct CalibHessian
 	{
 		// [0-3: Kl, 4-7: Kr, 8-12: l2r]
 		this->value = value;
-		value_scaled[0] = SCALE_F * value[0];
-		value_scaled[1] = SCALE_F * value[1];
-		value_scaled[2] = SCALE_C * value[2];
-		value_scaled[3] = SCALE_C * value[3];
+		value_scaled[0] = SCALE_F * value[0]; // fx
+		value_scaled[1] = SCALE_F * value[1]; // fy
+		value_scaled[2] = SCALE_C * value[2]; // cx
+		value_scaled[3] = SCALE_C * value[3]; // cy
 
 		this->value_scaledf = this->value_scaled.cast<float>();
 		this->value_scaledi[0] = 1.0f / this->value_scaledf[0];
@@ -455,9 +464,9 @@ struct PointHessian
 		nullspaces_scale = -(idepth*1.001 - idepth/1.001)*500;
     }
 
-
+	// 새로운 키프레임(target)과 point 사이의 관계
 	std::vector<PointFrameResidual*> residuals;					// only contains good residuals (not OOB and not OUTLIER). Arbitrary order.
-	std::pair<PointFrameResidual*, ResState> lastResiduals[2]; 	// contains information about residuals to the last two (!) frames. ([0] = latest, [1] = the one before).
+	std::pair<PointFrameResidual*, ResState> lastResiduals[2]; 	// 마지막 두 개(!)에 잔차에 대한 정보를 포함한다. ([0] = 마지막, [1] = 마지막 직전).
 
 
 	void release();
@@ -465,15 +474,16 @@ struct PointHessian
     inline ~PointHessian() {assert(efPoint==0); release(); instanceCounter--;}
 
 
+	//! Input argument toKeep is never reffered in this function.
 	inline bool isOOB(const std::vector<FrameHessian*>& toKeep, const std::vector<FrameHessian*>& toMarg) const
 	{
 
 		int visInToMarg = 0;
-		for(PointFrameResidual* r : residuals)
+		for(PointFrameResidual* r : residuals) // Residuals는 언제 추가 되는거지? -> makeKeyFrame, etc.
 		{
-			if(r->state_state != ResState::IN) continue;
-			for(FrameHessian* k : toMarg)
-				if(r->target == k) visInToMarg++;
+			if(r->state_state != ResState::IN) continue; // 만약 잔차(factor)가 IN(정상)이 아니라면 넘긴다.
+			for(FrameHessian* k : toMarg) 
+				if(r->target == k) visInToMarg++;// toMarg에 대해 만약 잔차의 타겟 프레임 헤시안이 같으면,
 		}
 		if((int)residuals.size() >= setting_minGoodActiveResForMarg &&
 				numGoodResiduals > setting_minGoodResForMarg+10 &&
@@ -504,4 +514,3 @@ struct PointHessian
 
 
 }
-

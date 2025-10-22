@@ -473,19 +473,21 @@ void FullSystem::traceNewCoarse(FrameHessian* fh)
 	K(1,2) = Hcalib.cyl();
 
 	// frameHessians는 윈도우 내에 있는 활성 키프레임의 집합
-	for(FrameHessian* host : frameHessians)		// go through all active frames
+	// 따라서, 입력 인자 fh와 sliding window 내의 모든 활성 키프레임과 비교한다.
+	for(FrameHessian* host : frameHessians)		// go through all active "key"frames
 	{
-		// 첫 호출에서, host는 `firstFrame`이다.
-		SE3 hostToNew = fh->PRE_worldToCam * host->PRE_camToWorld;
+		SE3 hostToNew = fh->PRE_worldToCam * host->PRE_camToWorld; // host to new (local) transformation T 
 		Mat33f KRKi = K * hostToNew.rotationMatrix().cast<float>() * K.inverse();
 		Vec3f Kt = K * hostToNew.translation().cast<float>();
 
 		Vec2f aff = AffLight::fromToVecExposure(host->ab_exposure, fh->ab_exposure, host->aff_g2l(), fh->aff_g2l()).cast<float>();
 
-		// host의 pointHessian을 traceOn으로 처리함.
+		// host의 pointHessian을 traceOn()으로 처리함.
+		// traceOn()은 host frame(one of existing activated keyframes)의
+		// - ImmaturedPoints의 시차(disparity)를 fh와 비교하여 만듦
 		for(ImmaturePoint* ph : host->immaturePoints)
 		{
-			ph->traceOn(fh, KRKi, Kt, aff, &Hcalib, false );
+			ph->traceOn(fh, KRKi, Kt, aff, &Hcalib, false ); // 역깊이 범위를 줄여나간다.
 
 			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_GOOD) trace_good++; // Trace completed
 			if(ph->lastTraceStatus==ImmaturePointStatus::IPS_BADCONDITION) trace_badcondition++; // bad condition to trace
@@ -513,20 +515,24 @@ void FullSystem::activatePointsMT_Reductor(
 		std::vector<PointHessian*>* optimized,
 		std::vector<ImmaturePoint*>* toOptimize,
 		int min, int max, Vec10* stats, int tid)
-{
+{	
+	// ImmaturePoint의 idepth를 최적화하기 위한 잔차 클래스
 	ImmaturePointTemporaryResidual* tr = new ImmaturePointTemporaryResidual[frameHessians.size()];
 	for(int k=min;k<max;k++)
 	{
-		(*optimized)[k] = optimizeImmaturePoint((*toOptimize)[k],1,tr);
+		(*optimized)[k] = optimizeImmaturePoint((*toOptimize)[k],1,tr); // 2nd arg is minObs
 	}
 	delete[] tr;
 }
 
 
-
+/**
+ * @brief ImmaturePoint의 목록을 필터링하여 PointHessian으로 만들고,
+ * 	      idepth를 optmize한다.
+ */
 void FullSystem::activatePointsMT()
 {
-
+	// 추적점의 개수(희소성) 조절
 	if(ef->nPoints < setting_desiredPointDensity*0.66)
 		currentMinActDist -= 0.8;
 	if(ef->nPoints < setting_desiredPointDensity*0.8)
@@ -553,7 +559,7 @@ void FullSystem::activatePointsMT()
                 currentMinActDist, (int)(setting_desiredPointDensity), ef->nPoints);
 
 
-
+	// 각 픽셀에 가장 가까운 활성 포인트까지 거리를 계산함
 	FrameHessian* newestHs = frameHessians.back();
 
 	// make dist map.
@@ -562,6 +568,7 @@ void FullSystem::activatePointsMT()
 
 	//coarseTracker->debugPlotDistMap("distMap");
 
+	// 필터링 시작
 	std::vector<ImmaturePoint*> toOptimize; toOptimize.reserve(20000);
 
 
@@ -574,7 +581,7 @@ void FullSystem::activatePointsMT()
 		Vec3f Kt = (coarseDistanceMap->K[1] * fhToNew.translation().cast<float>());
 
 
-		for(unsigned int i=0;i<host->immaturePoints.size();i+=1)
+		for(unsigned int i=0;i<host->immaturePoints.size();i+=1) // go through immature points of active frames.
 		{
 			ImmaturePoint* ph = host->immaturePoints[i];
 			ph->idxInImmaturePoints = i;
@@ -642,6 +649,7 @@ void FullSystem::activatePointsMT()
 //	printf("ACTIVATE: %d. (del %d, notReady %d, marg %d, good %d, marg-skip %d)\n",
 //			(int)toOptimize.size(), immature_deleted, immature_notReady, immature_needMarg, immature_want, immature_margskip);
 
+	/* 최적화 시작 */
 	std::vector<PointHessian*> optimized; optimized.resize(toOptimize.size());
 
 	if(multiThreading)
@@ -651,6 +659,7 @@ void FullSystem::activatePointsMT()
 		activatePointsMT_Reductor(&optimized, &toOptimize, 0, toOptimize.size(), 0, 0);
 
 
+	// EnergyFunctional, EFFrame, EFPoint, FrameHessian, PointHessian 연결
 	for(unsigned k=0;k<toOptimize.size();k++)
 	{
 		PointHessian* newpoint = optimized[k];
@@ -660,11 +669,12 @@ void FullSystem::activatePointsMT()
 		{
 			newpoint->host->immaturePoints[ph->idxInImmaturePoints]=0;
 			newpoint->host->pointHessians.push_back(newpoint);
-			ef->insertPoint(newpoint);
+			// ef가 관리하는 EFPoint의 목록에 newpoint로 초기화하여 EFPoint 추가
+			ef->insertPoint(newpoint); // PointHessian과 EFFrame 사이에 연결
 			for(PointFrameResidual* r : newpoint->residuals)
 				ef->insertResidual(r);
 			assert(newpoint->efPoint != 0);
-			delete ph;
+			delete ph; // 다쓰고 ImmaturePoint instance 제거
 		}
 		else if(newpoint == (PointHessian*)((long)(-1)) || ph->lastTraceStatus==IPS_OOB)
 		{
@@ -678,6 +688,7 @@ void FullSystem::activatePointsMT()
 	}
 
 
+	// FrameHessian에서 후보 포인트들(ImmaturePoints들의 포인터 완전히 제거
 	for(FrameHessian* host : frameHessians)
 	{
 		for(int i=0;i<(int)host->immaturePoints.size();i++)
@@ -704,18 +715,21 @@ void FullSystem::activatePointsOldFirst()
 	assert(false);
 }
 
+// 지워질 점들에 플래그?
 void FullSystem::flagPointsForRemoval()
 {
 	assert(EFIndicesValid);
 
-	std::vector<FrameHessian*> fhsToKeepPoints;
-	std::vector<FrameHessian*> fhsToMargPoints;
+	std::vector<FrameHessian*> fhsToKeepPoints; // 포인트가 유지 될 프레임 헤시안들?
+	std::vector<FrameHessian*> fhsToMargPoints; // 포인트가 주변화 될 프레임 헤시안들?
 
 	//if(setting_margPointVisWindow>0)
 	{
-		for(int i=((int)frameHessians.size())-1;i>=0 && i >= ((int)frameHessians.size());i--)
+		//! This snippet NEVER works. The logic is broken.
+		for(int i=((int)frameHessians.size())-1; i>=0 && i >= ((int)frameHessians.size()); i--)
 			if(!frameHessians[i]->flaggedForMarginalization) fhsToKeepPoints.push_back(frameHessians[i]);
 
+		// works for flagged for marginalization
 		for(int i=0; i< (int)frameHessians.size();i++)
 			if(frameHessians[i]->flaggedForMarginalization) fhsToMargPoints.push_back(frameHessians[i]);
 	}
@@ -733,12 +747,13 @@ void FullSystem::flagPointsForRemoval()
 			PointHessian* ph = host->pointHessians[i];
 			if(ph==0) continue;
 
+			// Case: Drop because idepth is negative or residuals(factors) are not exist
 			if(ph->idepth_scaled < 0 || ph->residuals.size()==0)
 			{
 				host->pointHessiansOut.push_back(ph);
-				ph->efPoint->stateFlag = EFPointStatus::PS_DROP;
+				ph->efPoint->stateFlag = EFPointStatus::PS_DROP; // PS means Point Status
 				host->pointHessians[i]=0;
-				flag_nores++;
+				flag_nores++; // no residual
 			}
 			else if(ph->isOOB(fhsToKeepPoints, fhsToMargPoints) || host->flaggedForMarginalization)
 			{
@@ -835,7 +850,7 @@ void FullSystem::addActiveFrame( ImageAndExposure* image, int id )
 
 			coarseInitializer->setFirst(&Hcalib, fh);
 		}
-		else if(coarseInitializer->trackFrame(fh, outputWrapper))	// if SNAPPED then true
+		else if(coarseInitializer->trackFrame(fh, outputWrapper))	// if SNAPPED then true, It's initialized!
 		{
 			// first frame and current fh
 			initializeFromInitializer(fh); // energyFunctional(ef), firstFrame, newFrame을 초기화.
@@ -1036,36 +1051,40 @@ void FullSystem::makeNonKeyFrame( FrameHessian* fh)
 		fh->setEvalPT_scaled(fh->shell->camToWorld.inverse(),fh->shell->aff_g2l);
 	}
 
-	traceNewCoarse(fh);
+	// Calculate the depth of the frame to be made into a 
+	// keyframe by calculating the disparity from the existing 
+	// keyframes in the sliding window.
+	traceNewCoarse(fh); // Mature fh's points with keyframes in sliding window
 	delete fh;
 }
 
 void FullSystem::makeKeyFrame( FrameHessian* fh)
 {
 	// needs to be set by mapping thread
-	{   // 선형화 지점을 설정하고, 행렬 J의 영공간의 기저를 계산함
+	{   // 선형화 지점을 설정하고, 행렬 J의 영공간의 기저를 계산함(for gauge fixing)
 		boost::unique_lock<boost::mutex> crlock(shellPoseMutex);
 		assert(fh->shell->trackingRef != 0);
 		fh->shell->camToWorld = fh->shell->trackingRef->camToWorld * fh->shell->camToTrackingRef;
 		fh->setEvalPT_scaled(fh->shell->camToWorld.inverse(),fh->shell->aff_g2l);
 	}
 
-	traceNewCoarse(fh);
+	traceNewCoarse(fh); // 모든 키프레임에서 Immature point의 idepth range를 줄여나간다.
 
 	boost::unique_lock<boost::mutex> lock(mapMutex);
 
 	// =========================== Flag Frames to be Marginalized. =========================
-	flagFramesForMarginalization(fh);
+	// 특정 기준에 따라 주변화 해야할 키프레임인지 결정
+	flagFramesForMarginalization(fh); //* 첫 실행에는 FirstFrame과 현재 프레임 밖에 없으므로, 그냥 지나침
 
 
 	// =========================== add New Frame to Hessian Struct. =========================
-	fh->idx = frameHessians.size();
-	frameHessians.push_back(fh);
-	fh->frameID = allKeyFramesHistory.size();
-	allKeyFramesHistory.push_back(fh->shell);
-	ef->insertFrame(fh, &Hcalib);
+	fh->idx = frameHessians.size(); // 새로운 프레임인 fh에 키프레임 인덱스 제공
+	frameHessians.push_back(fh);    // 키프레임 집합에 push
+	fh->frameID = allKeyFramesHistory.size(); // frameID는 전체 프레임에서 번호
+	allKeyFramesHistory.push_back(fh->shell); // shell 즉, 외부 파라미터 정보만 넘긴다.
+	ef->insertFrame(fh, &Hcalib);             // 새로운 키프레임(fh)를 EFFrame으로 만듦, 이웃 프레임과 잔차 관계를 key-value로 만듦
 
-	setPrecalcValues();
+	setPrecalcValues(); // 현재 프레임(새로운 키프레임)과 이전 키프레임 사이에 상대 자세 등을 계산한다, ef는 x - x_0를 계산한다.
 
 
 
@@ -1090,7 +1109,7 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 
 
 	// =========================== Activate Points (& flag for marginalization). =========================
-	activatePointsMT();
+	activatePointsMT(); // ImmaturePoint to PointHessian, connect to EnergyFunctional
 	ef->makeIDX();
 
 
@@ -1209,7 +1228,7 @@ void FullSystem::initializeFromInitializer(FrameHessian* newFrame)
 	firstFrame->frameID = allKeyFramesHistory.size();
 	allKeyFramesHistory.push_back(firstFrame->shell);
 	ef->insertFrame(firstFrame, &Hcalib);
-	setPrecalcValues();
+	setPrecalcValues(); // This value will be used in FullSystemMarginalize:flagFramesForMarginalization
 
 	//int numPointsTotal = makePixelStatus(firstFrame->dI, selectionMap, wG[0], hG[0], setting_desiredDensity);
 	//int numPointsTotal = pixelSelector->makeMaps(firstFrame->dIp, selectionMap,setting_desiredDensity);
@@ -1245,6 +1264,7 @@ void FullSystem::initializeFromInitializer(FrameHessian* newFrame)
 
 
 		pt->idepth_max=pt->idepth_min=1;
+		//Important: 계속해서 marginalization을 해가며 idepth를 최적화 하기 때문에 mmaturePoint를 거치지 않는다.
 		PointHessian* ph = new PointHessian(pt, &Hcalib); // 내부적으로 idepth= (pt->idepth_max+pt->idepth_min)*0.5
 		delete pt; // ImmaturePoint is deleted..
 		if(!std::isfinite(ph->energyTH)) {delete ph; continue;}
@@ -1314,16 +1334,17 @@ void FullSystem::makeNewTraces(FrameHessian* newFrame, float* gtDepth)
 
 
 
+//TODO 이 함수 설명하기
 void FullSystem::setPrecalcValues()
 {
-	for(FrameHessian* fh : frameHessians)
+	for(FrameHessian* fh : frameHessians) // 모든 활성 키프레임 순회
 	{
-		fh->targetPrecalc.resize(frameHessians.size());
+		fh->targetPrecalc.resize(frameHessians.size()); // 자기 자신을 포함하여 사전계산 가능한 값을 계산.
 		for(unsigned int i=0;i<frameHessians.size();i++)
-			fh->targetPrecalc[i].set(fh, frameHessians[i], &Hcalib);
+			fh->targetPrecalc[i].set(fh, frameHessians[i], &Hcalib); // (host, taget, Hcalib)
 	}
 
-	ef->setDeltaF(&Hcalib);
+	ef->setDeltaF(&Hcalib); // x - x_0
 }
 
 

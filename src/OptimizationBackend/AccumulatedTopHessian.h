@@ -62,7 +62,7 @@ public:
 		}
 	};
 
-	inline void setZero(int nFrames, int min=0, int max=1, Vec10* stats=0, int tid=0)
+	inline void setZero(int nFrames, int min=0, int max=1, Vec10* stats=0, int tid=0) // tid: thread id
 	{
 
 		if(nFrames != nframes[tid])
@@ -71,7 +71,7 @@ public:
 #if USE_XI_MODEL
 			acc[tid] = new Accumulator14[nFrames*nFrames];
 #else
-			acc[tid] = new AccumulatorApprox[nFrames*nFrames];
+			acc[tid] = new AccumulatorApprox[nFrames*nFrames]; // 총 프레임 개수의 제곱..
 #endif
 		}
 

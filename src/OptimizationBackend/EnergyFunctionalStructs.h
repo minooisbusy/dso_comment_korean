@@ -48,6 +48,9 @@ class EnergyFunctional;
 
 
 
+/**
+ * @brief 최적화 그래프에서 하나의 factor를 담당하는 factor node
+ */
 class EFResidual
 {
 public:
@@ -82,10 +85,13 @@ public:
 	EFFrame* target;
 	int idxInAll;
 
+	/**
+	 * @brief 포즈 $\xi$, 카메라 파라미터 c,역깊이 $\rho$ㄷ대하한 오차의 미분값(Jacobian)을 저장하는 핵심 데이터
+	 */
 	RawResidualJacobian* J;
 
-	VecNRf res_toZeroF;
-	Vec8f JpJdF;
+	VecNRf res_toZeroF; // 선형화 지점(x_0)에서 잔차값, 선형화 된 잔차의 에너지를 계산할 때 사용
+	Vec8f JpJdF;		// J_pose * J_depth에 해당하는 미리 계산된 값
 
 
 	// status.
@@ -99,13 +105,16 @@ public:
 
 enum EFPointStatus {PS_GOOD=0, PS_MARGINALIZE, PS_DROP};
 
+/**
+ * @brief 역깊이를 중심으로한 최적화 노드
+ */
 class EFPoint
 {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 	EFPoint(PointHessian* d, EFFrame* host_) : data(d),host(host_)
 	{
-		takeData();
+		takeData(); // priorF(depth prior)=0, deltaF(curr-zero) 설정
 		stateFlag=EFPointStatus::PS_GOOD;
 	}
 	void takeData();
@@ -113,17 +122,28 @@ public:
 	PointHessian* data;
 
 
-
+	/**
+	 * @brief inverse depth의 prior. 최적화 과정에서 저ㅈ정 포인트의 역깊이가 너무 크게 변하지 않도록 제약을 가한다.
+	 * 	      전역 설정으로 현재는 0이다.
+	 */
 	float priorF;
-	float deltaF;
 
+	/**
+	 * @brief Change in inverse depth from the linearization point (idepth - idepth_zero).
+	 * set by method of EFPoint takeData()
+	 * modified by setDeltaF of EnergyFunctional in EnergyFunctional.cpp:208
+	 * read in calcLEngergyPt of EnergyFunctional:360,406, 
+	 *         fixLinearizationF() in EnergyFunctionalStructs.cpp:100, 103
+	 * 		   addPoint of AccumalatedTopHessianSSE in AccumulatedTopHessian.cpp:47, 54
+	 */
+	float deltaF;
 
 	// constant info (never changes in-between).
 	int idxInPoints;
 	EFFrame* host;
 
 	// contains all residuals.
-	std::vector<EFResidual*> residualsAll;
+	std::vector<EFResidual*> residualsAll; // 하나의 EFPoint에 대해 host에 대한 target"s"의 residual
 
 	float bdSumF;
 	float HdiF;
@@ -165,4 +185,3 @@ public:
 };
 
 }
-

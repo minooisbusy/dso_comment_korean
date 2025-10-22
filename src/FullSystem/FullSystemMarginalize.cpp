@@ -55,12 +55,17 @@ namespace dso
 
 
 
-void FullSystem::flagFramesForMarginalization(FrameHessian* newFH)
+// 프레임이 얼마나 오래된지에 따라 주변화 될 프레임인지 판단
+void FullSystem::flagFramesForMarginalization(FrameHessian* newFH) //! newFH is NOT USED!
 {
-	if(setting_minFrameAge > setting_maxFrames)
+	// 1. 고정된 최대 프레임 개수를 초과하는 가장 오래된 프레임들을 주변화 (일반적으로는 사용되지 않는 옵션)
+	// setting_minFrameAge(기본값 1) > setting_maxFrames(기본값 7)는 false이므로 이 블록은 거의 실행되지 않습니다.
+	if(setting_minFrameAge > setting_maxFrames) // 1 > 7 == false
 	{
+		// 최대 프레임의 인덱스부터 끝까지 주변화 플래그 True로 만듦
 		for(int i=setting_maxFrames;i<(int)frameHessians.size();i++)
 		{
+			// 0번부터 오래 된 순서이므로, [0, 최대인덱스-setting_maxFrames]까지 flag On!
 			FrameHessian* fh = frameHessians[i-setting_maxFrames];
 			fh->flaggedForMarginalization = true;
 		}
@@ -69,20 +74,25 @@ void FullSystem::flagFramesForMarginalization(FrameHessian* newFH)
 
 
 	int flagged = 0;
-	// marginalize all frames that have not enough points.
+	//? 포인트만 주변되고 포즈는 주변화 되지 않는 경우도 있나? -> 없을껄
+	//* marginalize all frames that have not enough points.
 	for(int i=0;i<(int)frameHessians.size();i++)
 	{
-		FrameHessian* fh = frameHessians[i];
-		int in = fh->pointHessians.size() + fh->immaturePoints.size();
+		FrameHessian* fh = frameHessians[i]; // one of activated ketframes
+		int in = fh->pointHessians.size() + fh->immaturePoints.size(); // # of whole points
+		//? 이미 주변화가 진행 된 케이스도 다시 주변화하나? -> 없음
+		//? pointHessianOut은 뭐지?
 		int out = fh->pointHessiansMarginalized.size() + fh->pointHessiansOut.size();
 
 
 		Vec2 refToFh=AffLight::fromToVecExposure(frameHessians.back()->ab_exposure, fh->ab_exposure,
 				frameHessians.back()->aff_g2l(), fh->aff_g2l());
 
-
-		if( (in < setting_minPointsRemaining *(in+out) || fabs(logf((float)refToFh[0])) > setting_maxLogAffFacInWindow)
-				&& ((int)frameHessians.size())-flagged > setting_minFrames)
+		if( ( // or condition start
+			  in < setting_minPointsRemaining *(in+out) || // 키프레임이 관측하는 3차원 포인트가 너무 적은가? (5% 미만)
+		      fabs(logf((float)refToFh[0])) > setting_maxLogAffFacInWindow // 새로운 키프레임과 밝기 차이가가 너무 심한가?
+		    ) // or condition end
+			&& ((int)frameHessians.size())-flagged > setting_minFrames) // 주변화 되는 키프레임을 포함한 전체 키프레임이 최소 키프레임 보다 많도록 유지
 		{
 //			printf("MARGINALIZE frame %d, as only %'d/%'d points remaining (%'d %'d %'d %'d). VisInLast %'d / %'d. traces %d, activated %d!\n",
 //					fh->frameID, in, in+out,
@@ -90,7 +100,7 @@ void FullSystem::flagFramesForMarginalization(FrameHessian* newFH)
 //					(int)fh->pointHessiansMarginalized.size(), (int)fh->pointHessiansOut.size(),
 //					visInLast, outInLast,
 //					fh->statistics_tracesCreatedForThisFrame, fh->statistics_pointsActivatedForThisFrame);
-			fh->flaggedForMarginalization = true;
+			fh->flaggedForMarginalization = true; // 위 조건을 만족하면 주변화 하라는 플래그 On!
 			flagged++;
 		}
 		else
@@ -105,20 +115,28 @@ void FullSystem::flagFramesForMarginalization(FrameHessian* newFH)
 	}
 
 	// marginalize one.
+	// 최대 키프레임 보다 많은 경우 주변화
 	if((int)frameHessians.size()-flagged >= setting_maxFrames)
 	{
 		double smallestScore = 1;
-		FrameHessian* toMarginalize=0;
-		FrameHessian* latest = frameHessians.back();
+		FrameHessian* toMarginalize=0; // FrameHessian의 포인터, 아직 할당하지 않음
+		FrameHessian* latest = frameHessians.back(); // 가장 최근 키프레임, newFH와 같은 것인듯
 
 
 		for(FrameHessian* fh : frameHessians)
 		{
+			//? 안전장치, 프레임 나이(Age)의 차이 보다 크다면?
+			// 활성 키프레임 중 하나의 아이디(등록 순서)가 적어도 lastest와 setting_minFrameAg 만큼 떨어져있어야함. 아니면 주변화 X
+			// 현재 키프레임이 첫 키프레임이면 주변화 하지 않는다.
 			if(fh->frameID > latest->frameID-setting_minFrameAge || fh->frameID == 0) continue;
 			//if(fh==frameHessians.front() == 0) continue;
 
+			//*START MARGINALIZATION CONDITION CHECKING*//
 			double distScore = 0;
-			for(FrameFramePrecalc &ffh : fh->targetPrecalc)
+			//* targetPreclac는 키프레임 `fh`와 현재 슬라이딩 윈도우 내의 다른 키프레임간의 기하학적 관계를 미리 캐싱한 저장소
+			//* host frame에서 target frame으로 변환을 담고 있다.
+			//TODO for loop 해석
+			for(FrameFramePrecalc &ffh : fh->targetPrecalc) // fh와 n번째 프레임의 상대 자세
 			{
 				if(ffh.target->frameID > latest->frameID-setting_minFrameAge+1 || ffh.target == ffh.host) continue;
 				distScore += 1/(1e-5+ffh.distanceLL);
@@ -140,10 +158,11 @@ void FullSystem::flagFramesForMarginalization(FrameHessian* newFH)
 		flagged++;
 	}
 
-//	printf("FRAMES LEFT: ");
-//	for(FrameHessian* fh : frameHessians)
-//		printf("%d ", fh->frameID);
-//	printf("\n");
+	// [디버깅용] 주변화 플래그가 설정된 후, 윈도우에 남아있는 프레임들의 ID를 출력합니다.
+	// printf("FRAMES LEFT (before marginalization): ");
+	// for(FrameHessian* fh : frameHessians)
+	// 	if(!fh->flaggedForMarginalization) printf("%d ", fh->frameID);
+	// printf("\n");
 }
 
 
@@ -158,7 +177,7 @@ void FullSystem::marginalizeFrame(FrameHessian* frame)
 
 	ef->marginalizeFrame(frame->efFrame);
 
-	// drop all observations of existing points in that frame.
+	// drop all observations of existing points in that(marginalized) frame.
 
 	for(FrameHessian* fh : frameHessians)
 	{

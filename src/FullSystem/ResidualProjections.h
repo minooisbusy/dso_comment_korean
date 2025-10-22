@@ -32,7 +32,9 @@
 namespace dso
 {
 
-
+/** 
+ * @brief derivative of residual w.r.t. idepth of host
+ */
 EIGEN_STRONG_INLINE float derive_idepth(
 		const Vec3f &t, const float &u, const float &v,
 		const int &dx, const int &dy, const float &dxInterp,
@@ -67,14 +69,15 @@ EIGEN_STRONG_INLINE bool projectPoint(
 		float &drescale, float &u, float &v,
 		float &Ku, float &Kv, Vec3f &KliP, float &new_idepth)
 {
+	// Ki*p를 의미함. 즉, normalized coord로 변환
 	KliP = Vec3f(
 			(u_pt+dx-HCalib->cxl())*HCalib->fxli(),
 			(v_pt+dy-HCalib->cyl())*HCalib->fyli(),
 			1);
 
-	Vec3f ptp = R * KliP + t*idepth;
-	drescale = 1.0f/ptp[2];
-	new_idepth = idepth*drescale;
+	Vec3f ptp = R * KliP + t*idepth; // idepth로 스케일링 되어있는 target에서 projection (on normalized coord.)
+	drescale = 1.0f/ptp[2];          // 아마도 'd'epth 'rescale'이고, ptp[2] == Z_t*idepth
+	new_idepth = idepth*drescale;    // idepth/(Z_t*idepth) = 1/z_t = target idepth
 
 	if(!(drescale>0)) return false;
 
@@ -83,6 +86,9 @@ EIGEN_STRONG_INLINE bool projectPoint(
 	Ku = u*HCalib->fxl() + HCalib->cxl();
 	Kv = v*HCalib->fyl() + HCalib->cyl();
 
+	// wM3G = w - 3
+	//? why 1.1f?
+	//Answer: 보간법을 고려한 선택이다.
 	return Ku>1.1f && Kv>1.1f && Ku<wM3G && Kv<hM3G;
 }
 

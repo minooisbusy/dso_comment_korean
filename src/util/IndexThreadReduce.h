@@ -190,7 +190,7 @@ private:
 				callPerIndex(todo, std::min(todo+stepSize, maxIndex), &s, idx);
 				gotOne[idx] = true;
 				lock.lock();
-				stats += s;
+				stats += s; // 공유 변수(stats) 접근을 위해 lock 한 것이다.
 			}
 
 			// otherwise wait on signal, releasing lock in the meantime.
