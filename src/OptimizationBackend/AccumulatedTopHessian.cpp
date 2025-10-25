@@ -80,7 +80,7 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 		// 3. Jacobian을 가져온다. Jacobian은 PointFrameResidual::linearize()에서 계산 된다.
 		RawResidualJacobian* rJ = r->J; // 마지막 선형화 시점의 Jacobian J(x_0)
 		int htIDX = r->hostIDX + r->targetIDX*nframes[tid]; //? host to target index
-		Mat18f dp = ef->adHTdeltaF[htIDX]; // Δξ, Δa, Δb: 포즈 및 광도 파라미터 변화량
+		Mat18f dp = ef->adHTdeltaF[htIDX]; // Δξ, Δa, Δb: 포즈 및 광도 파라미터의 "상대적" 변화량(Target frame에서 변화량)
 
 
 
@@ -135,18 +135,18 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 		}
 
 
-		// 아마도 H_cc
-		acc[tid][htIDX].update(
+		// H_cc
+		acc[tid][htIDX].update( // 계산 H_cc ≈ (∂p/∂x_cam)ᵀ * ((∂r/∂p)ᵀ(∂r/∂p)) * (∂p/∂x_cam)
 				rJ->Jpdc[0].data(), rJ->Jpdxi[0].data(),
 				rJ->Jpdc[1].data(), rJ->Jpdxi[1].data(),
 				rJ->JIdx2(0,0),rJ->JIdx2(0,1),rJ->JIdx2(1,1));
 
-		// 아마도 H_dd
+		// H_ab, b_ab, r^2를 계산
 		acc[tid][htIDX].updateBotRight(
 				rJ->Jab2(0,0), rJ->Jab2(0,1), Jab_r[0],
-				rJ->Jab2(1,1), Jab_r[1],rr);
+				rJ->Jab2(1,1), Jab_r[1],rr); // rr은 b-vector 계산용이다.
 
-		// 아마도 H_cd
+		// H_cd
 		acc[tid][htIDX].updateTopRight(
 				rJ->Jpdc[0].data(), rJ->Jpdxi[0].data(),
 				rJ->Jpdc[1].data(), rJ->Jpdxi[1].data(),
@@ -199,45 +199,55 @@ template void AccumulatedTopHessianSSE::addPoint<2>(EFPoint* p, EnergyFunctional
 
 void AccumulatedTopHessianSSE::stitchDouble(MatXX &H, VecX &b, EnergyFunctional const * const EF, bool usePrior, bool useDelta, int tid)
 {
+	// 1. Hessian과 b-vector를 프레임 개수x(포즈+ab)(8) + 내부 파라미터 개수(4)의 크기로 할당하고 0으로 초기화 한다. 
 	H = MatXX::Zero(nframes[tid]*8+CPARS, nframes[tid]*8+CPARS);
 	b = VecX::Zero(nframes[tid]*8+CPARS);
 
 
+	// 모든 프레임 쌍(host, target)에 대해 반복한다
+	// 각 잔차(residual)는 host와 target 프레임을 연결하므로, 이 두 프레임의 상태에 모두 영향을 준다.
 	for(int h=0;h<nframes[tid];h++)
 		for(int t=0;t<nframes[tid];t++)
 		{
-			int hIdx = CPARS+h*8;
-			int tIdx = CPARS+t*8;
-			int aidx = h+nframes[tid]*t;
+			int hIdx = CPARS+h*8; // host 프레임 변수가 H, b에서 시작하는 인덱스
+			int tIdx = CPARS+t*8; // target 프레임 변수가 H, b에서 시작하는 인덱스
+			int aidx = h+nframes[tid]*t; // (h, t) 쌍에 대한 고유 인덱스
+
+			// 3. (h, t) 쌍에 대해 누적된 정보(accH)를 가져온다.
+			// acc[tid][aidx]는 addPoint 함수에서 계산 된 JᵀJ와 Jᵀr 정보를 담고 있다.
+			acc[tid][aidx].finish(); // 전체 누적을 합한다.
+			if(acc[tid][aidx].num==0) continue; // 누적된 정보 없으면 패스!
+
+			MatPCPC accH = acc[tid][aidx].H.cast<double>(); // 13x13 크기의 누적된 행렬
 
 
+			// 4. Adjoint 행렬을 사용하여 누적된 정보를 전체 H, b에 조립한다.
+			// accH는 target 프레임의 지역 좌표계 기준 정보이므로,
+			// Adjoint 행렬(EF->adHost, EF->adTarget)을 사용해 전역 좌표계로 변환하여 더해준다.
+			// 이 과정은 J_global = J_local * Adjoint와 유사한 변환을 H행렬에 적용하는 것이다.
 
-			acc[tid][aidx].finish();
-			if(acc[tid][aidx].num==0) continue;
-
-			MatPCPC accH = acc[tid][aidx].H.cast<double>();
-
-
+			// H 행렬의 대각 블록 (H_hh, H_tt) 업데이트
 			H.block<8,8>(hIdx, hIdx).noalias() += EF->adHost[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adHost[aidx].transpose();
-
 			H.block<8,8>(tIdx, tIdx).noalias() += EF->adTarget[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adTarget[aidx].transpose();
 
+			// H 행렬의 비대각 블록(H_ht) 업데이트
 			H.block<8,8>(hIdx, tIdx).noalias() += EF->adHost[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adTarget[aidx].transpose();
 
+			// H 행렬의 카메라 내부 파라미터-포즈 결합 블록 (H_ch, H_ct) 업데이트
 			H.block<8,CPARS>(hIdx,0).noalias() += EF->adHost[aidx] * accH.block<8,CPARS>(CPARS,0);
-
 			H.block<8,CPARS>(tIdx,0).noalias() += EF->adTarget[aidx] * accH.block<8,CPARS>(CPARS,0);
 
+			//H 행렬의 카메라 내부 파라미터 블록 (H_cc) 업데이트
 			H.topLeftCorner<CPARS,CPARS>().noalias() += accH.block<CPARS,CPARS>(0,0);
 
+			// b-vector 업데이트
 			b.segment<8>(hIdx).noalias() += EF->adHost[aidx] * accH.block<8,1>(CPARS,8+CPARS);
-
 			b.segment<8>(tIdx).noalias() += EF->adTarget[aidx] * accH.block<8,1>(CPARS,8+CPARS);
-
 			b.head<CPARS>().noalias() += accH.block<CPARS,1>(0,8+CPARS);
 		}
 
 
+	// 5. 대칭성을 이용해 하삼각행렬을 채운다. 이전 단계는 상삼각행렬만 계산함!
 	// ----- new: copy transposed parts.
 	for(int h=0;h<nframes[tid];h++)
 	{
@@ -334,5 +344,3 @@ void AccumulatedTopHessianSSE::stitchDoubleInternal(
 
 
 }
-
-

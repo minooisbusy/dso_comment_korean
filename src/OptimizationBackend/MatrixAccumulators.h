@@ -270,6 +270,7 @@ public:
 	assert(numIn1k==0);
 
 	int idx=0;
+	// 대칭 행렬을 채운다.
 	for(int r=0;r<14;r++)
 		for(int c=r;c<14;c++)
 		{
@@ -278,7 +279,7 @@ public:
 			idx+=4;
 		}
 	  assert(idx==4*105);
-	  num = numIn1 + numIn1k + numIn1m;
+	  num = numIn1 + numIn1k + numIn1m; // 전체 개수
   }
 
 
@@ -754,16 +755,28 @@ inline void finish()
 /*
  * same as other method, just that x/y are composed of two parts, the first 4 elements are in x4/y4, the last 6 in x6/y6.
  */
+
+// x4: rJ->Jpdc[0].data(),  // d[u]/d[c] in 1x4
+// x6: rJ->Jpdxi[0].data(), // d[v]/d[c] in 1x6
+// y4: rJ->Jpdc[1].data(),  // d[u]/d[xi] in 1x4
+// y6: rJ->Jpdxi[1].data(), // d[v]/d[xi] in 1x6
+// a : rJ->JIdx2(0,0),
+// b : rJ->JIdx2(0,1),
+// c : rJ->JIdx2(1,1);
+// JIdx2 : [[a, b]; [b, c]]
   inline void update(
-		  const float* const x4,
-		  const float* const x6,
-		  const float* const y4,
-		  const float* const y6,
+		  const float* const x4, // d[u]/d[c] in 1x4
+		  const float* const x6, // d[v]/d[c] in 1x6
+		  const float* const y4, // d[u]/d[xi] in 1x4
+		  const float* const y6, // d[v]/d[xi] in 1x6
 		  const float a,
 		  const float b,
 		  const float c)
   {
+	  // H ≈ (∂p/∂x)ᵀ * ((∂r/∂p)ᵀ(∂r/∂p)) * (∂p/∂x)
+	  // H ≈ a*(∂u/∂x)ᵀ(∂u/∂x) + c*(∂v/∂x)ᵀ(∂v/∂x) + b*((∂u/∂x)ᵀ(∂v/∂x) + (∂v/∂x)ᵀ(∂u/∂x))
 
+	  // 1st row, 10 elements
 	  Data[0] += a*x4[0]*x4[0] + c*y4[0]*y4[0] +  b*(x4[0]*y4[0] + y4[0]*x4[0]);
 	  Data[1] += a*x4[1]*x4[0] + c*y4[1]*y4[0] +  b*(x4[1]*y4[0] + y4[1]*x4[0]);
 	  Data[2] += a*x4[2]*x4[0] + c*y4[2]*y4[0] +  b*(x4[2]*y4[0] + y4[2]*x4[0]);
@@ -778,6 +791,7 @@ inline void finish()
 
 
 
+	  // 2nd row, 9 elements 
 	  Data[10] += a*x4[1]*x4[1] + c*y4[1]*y4[1] +  b*(x4[1]*y4[1] + y4[1]*x4[1]);
 	  Data[11] += a*x4[2]*x4[1] + c*y4[2]*y4[1] +  b*(x4[2]*y4[1] + y4[2]*x4[1]);
 	  Data[12] += a*x4[3]*x4[1] + c*y4[3]*y4[1] +  b*(x4[3]*y4[1] + y4[3]*x4[1]);
@@ -790,6 +804,7 @@ inline void finish()
 
 
 
+	  // 3rd row, 8 elements... and so on..
 	  Data[19] += a*x4[2]*x4[2] + c*y4[2]*y4[2] +  b*(x4[2]*y4[2] + y4[2]*x4[2]);
 	  Data[20] += a*x4[3]*x4[2] + c*y4[3]*y4[2] +  b*(x4[3]*y4[2] + y4[3]*x4[2]);
 	  Data[21] += a*x6[0]*x4[2] + c*y6[0]*y4[2] +  b*(x6[0]*y4[2] + y6[0]*x4[2]);
@@ -902,12 +917,12 @@ inline void finish()
   }
 
   inline void updateBotRight(
-		  const float a00,
-		  const float a01,
-		  const float a02,
-		  const float a11,
-		  const float a12,
-		  const float a22)
+		  const float a00, // H_ab(0,0) = J_a^T * J_a
+		  const float a01, // H_ab(0,1) = J_a^T * J_b
+		  const float a02, // b_ab(0)   = J_a^T * r
+		  const float a11, // H_ab(1,1) = J_b^T * J_b
+		  const float a12, // b_ab(1)   = J_b^T * r
+		  const float a22) // sum(r^2)
   {
 	  BotRight_Data[0] += a00;
 	  BotRight_Data[1] += a01;
@@ -920,14 +935,17 @@ inline void finish()
 
 
 private:
+  // H_cc에 대한 배열
   EIGEN_ALIGN16 float Data[60];
   EIGEN_ALIGN16 float Data1k[60];
   EIGEN_ALIGN16 float Data1m[60];
 
+  // H_cd에 대한 배열
   EIGEN_ALIGN16 float TopRight_Data[32];
   EIGEN_ALIGN16 float TopRight_Data1k[32];
   EIGEN_ALIGN16 float TopRight_Data1m[32];
 
+  // H_dd에 대한 배열
   EIGEN_ALIGN16 float BotRight_Data[8];
   EIGEN_ALIGN16 float BotRight_Data1k[8];
   EIGEN_ALIGN16 float BotRight_Data1m[8];

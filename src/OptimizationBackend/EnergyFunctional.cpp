@@ -701,17 +701,18 @@ void EnergyFunctional::marginalizePointsF()
 	MatXX M, Msc;
 	VecX Mb, Mbsc;
 	accSSE_top_A->stitchDouble(M,Mb,this,false,false); // stitch가 꾀맨다는 뜻으로, 조립과 상통하는듯.
-	accSSE_bot->stitchDouble(Msc,Mbsc,this);
+	accSSE_bot->stitchDouble(Msc,Mbsc,this); // 슈어 보수 행렬 스티칭
 
 	resInM+= accSSE_top_A->nres[0]; // 통계용: 주변화된 잔차 수 업데이트
 
 	// 5. 슈어 보수를 적용하여 포인트 변수를 소거하고, 카메라 변수에 대한 정보만을 남긴다.
 	//	  H_cam = H_cc - H_cp * H_pp^-1 * H_pc
+	// 주변화 된 Hessian과 b-vector.
 	MatXX H =  M-Msc;
     VecX b =  Mb-Mbsc;
 
 	// 6. (Option) 시스템의 게이지 자유도를 제거하기 위해 영공간 직교화 수행
-	if(setting_solverMode & SOLVER_ORTHOGONALIZE_POINTMARG)
+	if(setting_solverMode & SOLVER_ORTHOGONALIZE_POINTMARG) // false
 	{
 		// have a look if prior is there.
 		bool haveFirstFrame = false;

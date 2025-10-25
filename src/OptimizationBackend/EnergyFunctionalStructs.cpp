@@ -93,6 +93,9 @@ void EFPoint::takeData()
 }
 
 
+// 같은 코드블록이 src/OptimizationBackend/AccumulatedTopHessian.cpp의 
+// template<int mode> void AccumulatedTopHessianSSE::addPoint(...)
+//의 mode=1일 때 나타난다.
 void EFResidual::fixLinearizationF(EnergyFunctional* ef)
 {
 	Vec8f dp = ef->adHTdeltaF[hostIDX+ef->nFrames*targetIDX];
