@@ -136,7 +136,19 @@ struct FrameHessian
 	bool flaggedForMarginalization;
 
 	std::vector<PointHessian*> pointHessians;				// contains all ACTIVE points.
+
+	// pointHessianMarginalized : 최적화 변수에서 제거되지만, 시스템에 남겨두고 싶은 포린트들을 저장하는 컨테이너
+	// * 역깊이를 더이상 최적화 하진 않지만, 포인트가 갖고 있는 정보를 헤시안의 사전정보에 통합(주변화)하여 시스템의 안정성을 유지하는 데 사용
+	// * "추적은 불가능하지만(예를 들어, 화면 밖으로 나감), 포인트의 깊이 추정치는 꽤 신뢰할만해서 정보를 버리기 아까울 때" 추가됨
+	// * 이후 최적화 과정에서 제약 조건처럼 작용하여, 시스템이 갑자기 불안정해지는 것을 막는다.
 	std::vector<PointHessian*> pointHessiansMarginalized;	// contains all MARGINALIZED points (= fully marginalized, usually because point went OOB.)
+
+	// pointHessianOut : Outlier로 판별 되어 최적화에 사용되지 않고 버려지는 포인트들을 저장하는 컨테이너
+	// * 물리적으로 불가능한 상태(idepth < 0)
+	// * 관측 정보가 전혀 없을 때
+	// * 화면 밖으로 벗어나는 등, 추적이 불가능해지거나 포인트 자체의 신뢰도가 낮아 주변화 가치 없을 때
+	// * 인라이어로 보기 어려운, 품질이 낮은 포인트
+	// 둘은 FullSystem::flagPointsForRemoval()에서 추가 된다.
 	std::vector<PointHessian*> pointHessiansOut;		// contains all OUTLIER points (= discarded.).
 	std::vector<ImmaturePoint*> immaturePoints;		// contains all OUTLIER points (= discarded.).
 
@@ -442,7 +454,7 @@ struct PointHessian
 	float nullspaces_scale;
 	float idepth_hessian;
 	float maxRelBaseline;
-	int numGoodResiduals;
+	int numGoodResiduals; // PointHessian이 생성 된 후, 이 포인트와 연결 된 Residual이 성공적으로 IN(inlier) 상태로 처리 된 횟수를 누적하는 "카운터"
 
 	enum PtStatus {ACTIVE=0, INACTIVE, OUTLIER, OOB, MARGINALIZED};
 	PtStatus status;
@@ -474,30 +486,45 @@ struct PointHessian
     inline ~PointHessian() {assert(efPoint==0); release(); instanceCounter--;}
 
 
+	/** 
+	 * @brief 이 포인트가 Out-Of-Bounds 상태인지, 즉 최적화에서 제거되어야 하는지 판단한다.
+	 * @param toKeep (사용되지 않음) 유지 될 프레임 목록.
+	 * @param toKarg 곧 주변화 될 프레임 목록
+	 * @return 제거 대상이면 true, 아니면 false
+	*/
 	//! Input argument toKeep is never reffered in this function.
 	inline bool isOOB(const std::vector<FrameHessian*>& toKeep, const std::vector<FrameHessian*>& toMarg) const
 	{
-
+		// 조건 1: 포인트의 관측 정보가 곧 사라질 예정인가?
 		int visInToMarg = 0;
-		for(PointFrameResidual* r : residuals) // Residuals는 언제 추가 되는거지? -> makeKeyFrame, etc.
+		for(PointFrameResidual* r : residuals) // 이 포인트와 연결된 모든 활성 잔차(관측)를 순회
 		{
-			if(r->state_state != ResState::IN) continue; // 만약 잔차(factor)가 IN(정상)이 아니라면 넘긴다.
+			if(r->state_state != ResState::IN) continue; // 잔차(factor)가 IN(정상)인 경우만 고려
 			for(FrameHessian* k : toMarg) 
-				if(r->target == k) visInToMarg++;// toMarg에 대해 만약 잔차의 타겟 프레임 헤시안이 같으면,
+				if(r->target == k) visInToMarg++;// 관측 대상(target) 프레임이 곧 주변화 될 프레임(toMarg) 목록에 있는지 확인
 		}
-		if((int)residuals.size() >= setting_minGoodActiveResForMarg &&
-				numGoodResiduals > setting_minGoodResForMarg+10 &&
-				(int)residuals.size()-visInToMarg < setting_minGoodActiveResForMarg)
-			return true;
+		
+		if((int)residuals.size() >= setting_minGoodActiveResForMarg && // (1) 포인트가 충분히 관측 되었고,
+				numGoodResiduals > setting_minGoodResForMarg+10 &&	   // (2) 과거부터 얼마나 꾸준히 좋은지를 나타내는 것(umGoodResiduals)
+				(int)residuals.size()-visInToMarg < setting_minGoodActiveResForMarg) // (3) 주변화 이후 남게 될 관측 수가 최소 기준치 미만으로 떨어진다면,
+			return true; // 이 포인트는 더이상 유효하지 않으므로 제거 대상으로 판단 (true 반환)
+		// 즉, 과거부터 아주 신뢰성 있게 잘 추적되던 좋은 포인트(2)가, 
+		// 이번 키프레임 주변화로 인해 앞으로는 관측 수가 너무 부족해져서(3)
+		// 더 이상 제역할을 못할 것으로 예상된다면, 차라리 지금 제거하는게 낫다.
+			
 
 
 
 
 
+		// 조건 2: 가장 최근 관측이 OOB 상태인가?
 		if(lastResiduals[0].second == ResState::OOB) return true;
+		// 조건 3: 포인트가 충분히 관측되지 않는가?
 		if(residuals.size() < 2) return false;
+		// 조건 4: 최근 두 번의 관측이 모두 Outlier인가?
 		if(lastResiduals[0].second == ResState::OUTLIER && lastResiduals[1].second == ResState::OUTLIER) return true;
-		return false;
+
+		return false; // 상기 조건을 만족하지 못하면 OOB가 아니다.
 	}
 
 

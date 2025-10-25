@@ -471,13 +471,13 @@ float FullSystem::optimize(int mnumOptIts)
 
 
 	// 모든 활성 잔차 오류와 "야코비안"을 계산. false는 고정된 선형화가 없음을 의미함.
-	Vec3 lastEnergy = linearizeAll(false); // 잔차를 선형화 하고, 예상되는 새로운 상태(정상? 이상치? 영상에 투영되지 않음?)만 지정한다.
+	Vec3 lastEnergy = linearizeAll(false); // "활성" 잔차를 선형화 하고, 예상되는 새로운 상태(정상? 이상치? 영상에 투영되지 않음?)만 지정한다.
 
 	/* setting_forceAcceptStep이 true이므로, 아래 두 함수는 0을 리턴한다.*/
 	// 주변화 되어야하는 모든 잔차 에너지의 합
-	double lastEnergyL = calcLEnergy(); // calculate Last Energy? setting_forceAceptStep가 true이기에 0을 리턴함.
+	double lastEnergyL = calcLEnergy(); // calculate Linearized Energy setting_forceAceptStep가 true이기에 0을 리턴함.
 	// 주변화 후 남은 사전 에너지(여기서 에너지는 선형화되었고 선형화 지점이 고정되었음을 유의)
-	double lastEnergyM = calcMEnergy(); // 위와 같이 0을 리턴함
+	double lastEnergyM = calcMEnergy(); // calculate Marginalized Energy 위와 같이 0을 리턴함
 
 
 

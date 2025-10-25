@@ -597,20 +597,23 @@ class AccumulatorApprox
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 
-  Mat1313f H;
-  size_t num;
+  Mat1313f H; // final result
+  size_t num; // total # of data
 
   inline void initialize()
   {
-	memset(Data,0, sizeof(float)*60);
+	// H_cam
+	memset(Data,0, sizeof(float)*60); // 10(10+1)/2 = 55 < 60
 	memset(Data1k,0, sizeof(float)*60);
 	memset(Data1m,0, sizeof(float)*60);
 
-	memset(TopRight_Data,0, sizeof(float)*32);
+	// H_bb
+	memset(TopRight_Data,0, sizeof(float)*32); // 10 * 3 = 30 < 32
 	memset(TopRight_Data1k,0, sizeof(float)*32);
 	memset(TopRight_Data1m,0, sizeof(float)*32);
 
-	memset(BotRight_Data,0, sizeof(float)*8);
+	//H_cam_b
+	memset(BotRight_Data,0, sizeof(float)*8); // 3*(3+1)/2=6 < 8
 	memset(BotRight_Data1k,0, sizeof(float)*8);
 	memset(BotRight_Data1m,0, sizeof(float)*8);
     num = numIn1 = numIn1k = numIn1m = 0;

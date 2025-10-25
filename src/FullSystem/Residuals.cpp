@@ -103,7 +103,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 	// 포인트의 가중치, 아마도 수식 7번
 	const float * const weights = point->weights;
 
-	// 사전에 계산 된 값들(precalc)에서 광도 파라미터 갖고옴
+	// 사전에 계산 된 값들(precalc)에서 (상대적) 광도 파라미터 갖고옴
 	Vec2f affLL = precalc->PRE_aff_mode;
 	float b0 = precalc->PRE_b0_mode;
 

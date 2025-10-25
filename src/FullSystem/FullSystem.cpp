@@ -715,20 +715,27 @@ void FullSystem::activatePointsOldFirst()
 	assert(false);
 }
 
-// 지워질 점들에 플래그?
+// 지워질 점들에 플래그한다. 가비지 컬렉션 역할 수행.
 void FullSystem::flagPointsForRemoval()
 {
+	// 1. 사전 조건 확인: 백엔드(EnergyFunctional)의 인덱스가 최신 상태인지 확인한다.
 	assert(EFIndicesValid);
 
-	std::vector<FrameHessian*> fhsToKeepPoints; // 포인트가 유지 될 프레임 헤시안들?
-	std::vector<FrameHessian*> fhsToMargPoints; // 포인트가 주변화 될 프레임 헤시안들?
+	// 2. 주변화될 프레임 목록 생성
+	std::vector<FrameHessian*> fhsToKeepPoints; // 유지될 프레임 (주: 코드 로직상 항상 비어있음)
+	std::vector<FrameHessian*> fhsToMargPoints; // 주변화될 프레임
 
-	//if(setting_margPointVisWindow>0)
+	//if(setting_margPointVisWindow>0) // This setting seems to be removed or unused
 	{
 		//! This snippet NEVER works. The logic is broken.
+		// 위 주석에서 알 수 있듯,
+		// 아래 루프 조건 (i >= frameHessians.size())는 항상 거짓이므로 실행되지 않는다.
+		// 따라서 fhsToKeepPoints는 항상 비어있다.
 		for(int i=((int)frameHessians.size())-1; i>=0 && i >= ((int)frameHessians.size()); i--)
 			if(!frameHessians[i]->flaggedForMarginalization) fhsToKeepPoints.push_back(frameHessians[i]);
 
+		// 이전에 flagFramesForMarginalization() 함수에서 
+		// 주변화 대상으로 지정된 프레임들을 fhsToMargPoints에 수집한다.
 		// works for flagged for marginalization
 		for(int i=0; i< (int)frameHessians.size();i++)
 			if(frameHessians[i]->flaggedForMarginalization) fhsToMargPoints.push_back(frameHessians[i]);
@@ -738,48 +745,61 @@ void FullSystem::flagPointsForRemoval()
 
 	//ef->setAdjointsF();
 	//ef->setDeltaF(&Hcalib);
-	int flag_oob=0, flag_in=0, flag_inin=0, flag_nores=0;
+	int flag_oob=0, flag_in=0, flag_inin=0, flag_nores=0; // 통계용 카운터
 
-	for(FrameHessian* host : frameHessians)		// go through all active frames
+	// 3. 모든 활성 키프레임과 그에 속하는 3D 포인트들을 순회하며 검사
+	for(FrameHessian* host : frameHessians)
 	{
 		for(unsigned int i=0;i<host->pointHessians.size();i++)
 		{
 			PointHessian* ph = host->pointHessians[i];
-			if(ph==0) continue;
+			if(ph==0) continue; // 이미 처리된 포인트는 건너뜀
 
-			// Case: Drop because idepth is negative or residuals(factors) are not exist
+			// 4-1. 역깊이가 음수 이거나, 포인트에 잔차가 없는 제거한다.
 			if(ph->idepth_scaled < 0 || ph->residuals.size()==0)
 			{
-				host->pointHessiansOut.push_back(ph);
-				ph->efPoint->stateFlag = EFPointStatus::PS_DROP; // PS means Point Status
-				host->pointHessians[i]=0;
+				// 역깊이가 음수이거나, 관측하는 잔차가 하나도 없는 경우.
+				host->pointHessiansOut.push_back(ph); // 버려지는 포인트 목록에 추가
+				ph->efPoint->stateFlag = EFPointStatus::PS_DROP; // 백엔드에 제거 플래그 설정, PS means Point Status
+				host->pointHessians[i]=0; //현재 목록에서 제거 표시
 				flag_nores++; // no residual
 			}
+			// 4-2. OOB 상태이거나, 호스트 프레임이 주변화 대상인 포인트 처리
 			else if(ph->isOOB(fhsToKeepPoints, fhsToMargPoints) || host->flaggedForMarginalization)
 			{
 				flag_oob++;
+				// isOOB: 포인트가 시야를 벗어났거나, 관측 품질이 나쁘거나, 미래에 관측 정보를 잃을지 등을 종합적으로 판단
+				// host->flaggedForMarginalization: 포인트의 호스트 프레임 자체가 사라질 예정인 경우
+
+				// 4-2-a. 포인트가 충분히 좋은 Inlier였던 경우
 				if(ph->isInlierNew())
 				{
 					flag_in++;
+
+					// 버리기 아까우므로, 마지막으로 잔차를 선형화하여 정보를 갱신한다.
 					int ngoodRes=0;
 					for(PointFrameResidual* r : ph->residuals)
 					{
-						r->resetOOB();
-						r->linearize(&Hcalib);
-						r->efResidual->isLinearized = false;
-						r->applyRes(true);
+						r->resetOOB(); // state_state를 IN, state_NewState를 OOB로, 에너지 0
+						r->linearize(&Hcalib); // 잔차 재선형화 (가장 최신 정보 계산)
+						r->efResidual->isLinearized = false; // 선형화 플래그 리셋 (핵심)
+						r->applyRes(true); // 계산된 상태와 자코비안 적용
+						// 백엔드(EF)에 최종 정보 고정
 						if(r->efResidual->isActive())
 						{
 							r->efResidual->fixLinearizationF(ef);
 							ngoodRes++;
 						}
 					}
+
+					// 필요하다면 주변화 되었다고하고,
                     if(ph->idepth_hessian > setting_minIdepthH_marg)
 					{
 						flag_inin++;
 						ph->efPoint->stateFlag = EFPointStatus::PS_MARGINALIZE;
-						host->pointHessiansMarginalized.push_back(ph);
+						host->pointHessiansMarginalized.push_back(ph); // 시각화 목적, 주변화 기준에 사용 됨
 					}
+					// 필요 없다면, 버린다.
 					else
 					{
 						ph->efPoint->stateFlag = EFPointStatus::PS_DROP;
@@ -788,6 +808,7 @@ void FullSystem::flagPointsForRemoval()
 
 
 				}
+				// OOB가 아니면 그냥 버림
 				else
 				{
 					host->pointHessiansOut.push_back(ph);
@@ -796,19 +817,19 @@ void FullSystem::flagPointsForRemoval()
 
 					//printf("drop point in frame %d (%d goodRes, %d activeRes)\n", ph->host->idx, ph->numGoodResiduals, (int)ph->residuals.size());
 				}
-
+				// 포인트를 가리키는 포인터에 0을 할당(=제거 예약)
 				host->pointHessians[i]=0;
 			}
 		}
 
-
+		// 앞서 PointHessian의 목록에서 0으로 처리 했던 인덱스에 뒤에 있던 목록을 끌어온다.
 		for(int i=0;i<(int)host->pointHessians.size();i++)
 		{
 			if(host->pointHessians[i]==0)
 			{
 				host->pointHessians[i] = host->pointHessians.back();
 				host->pointHessians.pop_back();
-				i--;
+				i--; // 다시 같은 인덱스가 0인지 조사하기 위해 -- 사용.
 			}
 		}
 	}
@@ -1177,7 +1198,8 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 
 
 	// =========================== (Activate-)Marginalize Points =========================
-	flagPointsForRemoval();
+	flagPointsForRemoval(); // drop할 포인트와 marginalize할 포인트에 플래그!
+							// 추가적으로, 잔차 선형화를 고정한다.
 	ef->dropPointsF();
 	getNullspaces(
 			ef->lastNullspaces_pose,
@@ -1344,7 +1366,7 @@ void FullSystem::setPrecalcValues()
 			fh->targetPrecalc[i].set(fh, frameHessians[i], &Hcalib); // (host, taget, Hcalib)
 	}
 
-	ef->setDeltaF(&Hcalib); // x - x_0
+	ef->setDeltaF(&Hcalib); // E_linearized에 쓰이는 x - x_0 계산?
 }
 
 

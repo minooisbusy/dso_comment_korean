@@ -36,19 +36,19 @@ struct RawResidualJacobian
 	VecNRf resF;
 
 	// the two rows of d[x,y]/d[xi].
-	Vec6f Jpdxi[2];			// 2x6
+	Vec6f Jpdxi[2];			// d[x,y]/d[xi] in 2x6
 
 	// the two rows of d[x,y]/d[C].
-	VecCf Jpdc[2];			// 2x4
+	VecCf Jpdc[2];			// d[x,y]/d[C] in 2x4
 
 	// the two rows of d[x,y]/d[idepth].
-	Vec2f Jpdd;				// 2x1
+	Vec2f Jpdd;				// d[x,y]/d[idepth]in 2x1
 
 	// the two columns of d[r]/d[x,y].
-	VecNRf JIdx[2];			// 9x2
+	VecNRf JIdx[2];			//d[r]/d[x,y] in 9x2
 
 	// = the two columns of d[r] / d[ab]
-	VecNRf JabF[2];			// 9x2
+	VecNRf JabF[2];			// d[r] / d[ab] in 9x2
 
 
 	// = JIdx^T * JIdx (inner product). Only as a shorthand.

@@ -61,11 +61,21 @@ class CoarseDistanceMap;
 
 class EnergyFunctional;
 
+/**
+ * @brief (O(1) 복잡도) 벡터에서 i번째 원소가 가리키는 객체를 삭제하고, 해당 포인터 원소를 벡터에서 제거합니다.
+ *        이 함수는 벡터의 순서를 유지하지 않습니다.
+ * @details
+ * 1. delete v[i]: i번째 포인터가 가리키는 객체의 메모리를 해제합니다.
+ * 2. v[i] = v.back(): 마지막 원소(포인터)를 i번째 위치로 얕은 복사(주소값 복사)합니다.
+ * 3. v.pop_back(): 마지막 원소를 벡터에서 제거합니다.
+ * @param v T* 타입을 저장하는 벡터.
+ * @param i 제거할 원소의 인덱스.
+ */
 template<typename T> inline void deleteOut(std::vector<T*> &v, const int i)
 {
 	delete v[i];
-	v[i] = v.back();
-	v.pop_back();
+	v[i] = v.back(); // 맨 마지막 원소가 가리키는 주소를 복사
+	v.pop_back();    //
 }
 template<typename T> inline void deleteOutPt(std::vector<T*> &v, const T* i)
 {
@@ -92,17 +102,18 @@ template<typename T> inline void deleteOutOrder(std::vector<T*> &v, const T* ele
 	{
 		if(v[k] == element)
 		{
-			i=k;
+			i=k; // element가 존재하는 인덱스 복사
 			break;
 		}
 	}
 	assert(i!=-1);
 
+	// i 이후로 한칸씩 땡긴다.
 	for(unsigned int k=i+1; k<v.size();k++)
 		v[k-1] = v[k];
-	v.pop_back();
+	v.pop_back();// 마지막 원소는 버린다.(v.size()-2에 저장되어 있음)
 
-	delete element;
+	delete element; // 삭제!
 }
 
 

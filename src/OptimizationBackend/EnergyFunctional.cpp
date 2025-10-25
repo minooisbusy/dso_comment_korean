@@ -56,13 +56,13 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 		{
 			FrameHessian* host = frames[h]->data;
 			FrameHessian* target = frames[t]->data;
+			int idx = h + t * nFrames;
 
 			// 오른쪽부터 읽어서, H->W->T로 가니, Host->Target 변환.
 			SE3 hostToTarget = target->get_worldToCam_evalPT() * host->get_worldToCam_evalPT().inverse();
 
-			// Adjoint Host?
-			Mat88 AH = Mat88::Identity(); // 8 = 6 + 2, 6 for pose, 2 for photo. cal.
-			Mat88 AT = Mat88::Identity();
+			Mat88 AH = Mat88f::Identity(); // 8 = 6 + 2, 6 for pose, 2 for photo. cal.
+			Mat88 AT = Mat88f::Identity();
 
 			// Host have to switch coordinate system to target. So Adjoint is needed.
 			// $T_h$에 지역 섭동을 수행하여 $T_{ht}$에 섭동을 추가하면, 아래 꼴이 된다.
@@ -89,6 +89,8 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 
 			adHost[h+t*nFrames] = AH;
 			adTarget[h+t*nFrames] = AT;
+			adHostF[idx] = AH;
+			adTargetF[idx] = AT;
 		}
 	// Prior가 매우 크다, 따라서 초기에 주어진 파라미터 값을 매우 신뢰한다는 뜻.
 	cPrior = VecC::Constant(setting_initialCalibHessian); // setting_initialCalibHessian = 5e9
@@ -175,7 +177,7 @@ EnergyFunctional::~EnergyFunctional()
 
 
 
-// delta = x - x_0 (current - lin.point)
+// delta = x - x_0 (current - lin.point), 선형화 된 잔차의 $\Delta \bf x$를 계산
 void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 {
 	// Delta of Pose & photo.params
@@ -187,7 +189,7 @@ void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 	for(int h=0;h<nFrames;h++)
 		for(int t=0;t<nFrames;t++)
 		{
-			// Jp * Δp (포인트 p의 투영 위치에 대한 자코비안과 포즈 증분의 곱) 항을 미리 계산합니다.
+			// Jp * Δp (포즈 p의 투영 위치에 대한 자코비안 Jp과 포즈 증분의 곱 Δp) 항을 미리 계산합니다.
 			// 이는 잔차의 선형화된 근사치 r(x) ≈ r(x₀) + JΔx 에서 JΔx의 일부입니다.
 			// Δp는 host와 target 프레임의 포즈 증분(Δx_h, Δx_t)에 의해 결정됩니다.
 			// adHostF ≈ Jp * J_h, adTargetF ≈ Jp * J_t 이므로,
@@ -197,6 +199,8 @@ void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 
 			// Δx_h: frames[h]->data->get_state_minus_stateZero()
 			// Δx_t: frames[t]->data->get_state_minus_stateZero()
+			// Total derivative를 이용하여 계산 된다. 
+			// 상대적인 변화량..
 			adHTdeltaF[idx] = frames[h]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adHostF[idx]
 					        +frames[t]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adTargetF[idx];
 		}
@@ -205,6 +209,7 @@ void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 	cDeltaF = HCalib->value_minus_value_zero.cast<float>(); 
 	
 	// pose와 photo.cal의 delta(=x - x_0)
+	// 절대적인 변화량..
 	for(EFFrame* f : frames)
 	{
 		f->delta = f->data->get_state_minus_stateZero().head<8>();
@@ -349,7 +354,8 @@ double EnergyFunctional::calcMEnergyF()
 	assert(EFIndicesValid);
 
 	VecX delta = getStitchedDeltaF();
-	return delta.dot(2*bM + HM*delta);
+	// 2 * bM^T * dx + dx^T * HM * dx
+	return delta.dot(2*bM + HM*delta); // E=(r_0+J*dx)^2에서 상수 제외한 에너지
 }
 
 
@@ -538,26 +544,27 @@ void EnergyFunctional::marginalizeFrame(EFFrame* fh)
 //	std::sort(eigenvaluesPre.data(), eigenvaluesPre.data()+eigenvaluesPre.size());
 //
 
-
+	// 아래 코드블록은 주변화 할 결과 벡터(b-vector) 원소들을 끝으로 옮기고,
+	// Hessian 행렬도도 이에 맞춰 옮긴다.
 	if((int)fh->idx != (int)frames.size()-1)
 	{
-		int io = fh->idx*8+CPARS;	// 현재 프레임 인덱스만큼의 카메라 파라미터 + intrinsics = 포즈(6) 및 광도파라미터(2) + intrinsics(4)가 있다.
+		int io = fh->idx*8+CPARS;	// 현재 프레임 인덱스만큼의 카메라 파라미터 + intrinsics = 포즈(5) 및 광도파라미터(2) + intrinsics(4)가 있다.
 		int ntail = 8*(nFrames-fh->idx-1); // 주변화 후 벡터의 차원
 		assert((io+8+ntail) == nFrames*8+CPARS);
 
-		// b-vector 계산: 주변화 할 프레임의 상태 변수를 끝으로 옮긴다. (swap?)
+		// b-vector 계산: 주변화 할 프레임의 상태 변수를 끝으로 옮긴다. (swap)
 		Vec8 bTmp = bM.segment<8>(io); // io부터 8개 요소에 대한 벡터
 		VecX tailTMP = bM.tail(ntail); // bM의 뒤에서 ntail 개의 요소
 		bM.segment(io,ntail) = tailTMP; // bM의 io부터 ntail까지 tailTMP로 대체
 		bM.tail<8>() = bTmp;
 
-		// H 행렬에서 주변화 하려는 위치 8개 열을 마지막 열과 스왑
+		// H 행렬에서 주변화 하려는 위치의 열을 끝으로 옮기기(swap)
 		MatXX HtmpCol = HM.block(0,io,odim,8); // 0행에서 odim개 행, io열에서 9개 행의 블록을 잡는다.
 		MatXX rightColsTmp = HM.rightCols(ntail);
 		HM.block(0,io,odim,ntail) = rightColsTmp;
 		HM.rightCols(8) = HtmpCol;
 
-		// H 행렬에서 주변화 하려는 
+		// H 행렬에서 주변화 하려는 위치 행을 끝으로 옮기기 (swap)
 		MatXX HtmpRow = HM.block(io,0,8,odim);
 		MatXX botRowsTmp = HM.bottomRows(ntail);
 		HM.block(io,0,ntail,odim) = botRowsTmp;
@@ -566,35 +573,34 @@ void EnergyFunctional::marginalizeFrame(EFFrame* fh)
 
 
 //	// marginalize. First add prior here, instead of to active.
-    HM.bottomRightCorner<8,8>().diagonal() += fh->prior;
-    bM.tail<8>() += fh->prior.cwiseProduct(fh->delta_prior);
+    HM.bottomRightCorner<8,8>().diagonal() += fh->prior; // 주변화 할 블록에 prior를 더한다? 왜?
+    bM.tail<8>() += fh->prior.cwiseProduct(fh->delta_prior); // cwise-는 coefficient-wise fh의 prior vector에 Delta prior를 각각 곱함.
 
 
 
 //	std::cout << std::setprecision(16) << "HMPre:\n" << HM << "\n\n";
 
 
+	// Jacobi Preconditioning step 1
 	VecX SVec = (HM.diagonal().cwiseAbs()+VecX::Constant(HM.cols(), 10)).cwiseSqrt();
 	VecX SVecI = SVec.cwiseInverse();
 
-
-//	std::cout << std::setprecision(16) << "SVec: " << SVec.transpose() << "\n\n";
-//	std::cout << std::setprecision(16) << "SVecI: " << SVecI.transpose() << "\n\n";
-
-	// scale!
+	// scale! J... P... step 2
 	MatXX HMScaled = SVecI.asDiagonal() * HM * SVecI.asDiagonal();
 	VecX bMScaled =  SVecI.asDiagonal() * bM;
 
 	// invert bottom part!
 	Mat88 hpi = HMScaled.bottomRightCorner<8,8>();
-	hpi = 0.5f*(hpi+hpi);
-	hpi = hpi.inverse();
-	hpi = 0.5f*(hpi+hpi);
+	hpi = 0.5f*(hpi+hpi); // to-be symmetric
+	hpi = hpi.inverse(); // invserse
+	hpi = 0.5f*(hpi+hpi); // to-be symmetric
 
 	// schur-complement!
-	MatXX bli = HMScaled.bottomLeftCorner(8,ndim).transpose() * hpi;
-	HMScaled.topLeftCorner(ndim,ndim).noalias() -= bli * HMScaled.bottomLeftCorner(8,ndim);
-	bMScaled.head(ndim).noalias() -= bli*bMScaled.tail<8>();
+	MatXX bli = HMScaled.bottomLeftCorner(8,ndim).transpose() * hpi; // H_rm * H_mm^-1
+	// noalias()는 메모리 상에 겹치는 부분이 없다는 뜻이다. <= 개발자가 정말로 앨리어싱이 없음을 확신할 때만 써야한다.
+	// alias가 존재하는 default의 경우 임시 행렬을 만든다. -> 느려진다.
+	HMScaled.topLeftCorner(ndim,ndim).noalias() -= bli * HMScaled.bottomLeftCorner(8,ndim); // H_rr - H_rm * H_mm^-1 * H_mr
+	bMScaled.head(ndim).noalias() -= bli*bMScaled.tail<8>(); // b_r - H_rm * H_mm^-1 * b_m
 
 	//unscale!
 	HMScaled = SVec.asDiagonal() * HMScaled * SVec.asDiagonal();
@@ -607,8 +613,8 @@ void EnergyFunctional::marginalizeFrame(EFFrame* fh)
 	// remove from vector, without changing the order!
 	for(unsigned int i=fh->idx; i+1<frames.size();i++)
 	{
-		frames[i] = frames[i+1];
-		frames[i]->idx = i;
+		frames[i] = frames[i+1]; // 한 인덱스씩 위로!
+		frames[i]->idx = i; // index reordering
 	}
 	frames.pop_back();
 	nFrames--;
@@ -643,46 +649,68 @@ void EnergyFunctional::marginalizeFrame(EFFrame* fh)
 
 void EnergyFunctional::marginalizePointsF()
 {
+	// 0. 사전 조건 확인: 최적화에 필요한 값들이 최신 상태인지 확인한다.
 	assert(EFDeltaValid);
 	assert(EFAdjointsValid);
 	assert(EFIndicesValid);
 
-
+	// 1. 주변화할 포인트 목록 생성
+	// 		- FullSystem::flagPointsForRemoval() 함수에서 PS_MARGINALIZE 플래그가 설정된
+	//		  포인트들을 찾는다.
 	allPointsToMarg.clear();
 	for(EFFrame* f : frames)
 	{
-		for(int i=0;i<(int)f->points.size();i++)
+		for(int i=0;i<(int)f->points.size();i++) // 프레임의 모든 점을 순회
 		{
-			EFPoint* p = f->points[i];
-			if(p->stateFlag == EFPointStatus::PS_MARGINALIZE)
+			EFPoint* p = f->points[i]; // 프레임의 i번째 포인트
+			if(p->stateFlag == EFPointStatus::PS_MARGINALIZE) // Point Status가 주변화라면,
 			{
-				p->priorF *= setting_idepthFixPriorMargFac;
-				for(EFResidual* r : p->residualsAll)
-					if(r->isActive())
-                        connectivityMap[(((uint64_t)r->host->frameID) << 32) + ((uint64_t)r->target->frameID)][1]++;
-				allPointsToMarg.push_back(p);
+				// 1-1. 포인트의 역깊이에 대한 Prior 가중치를 크게 높힌다.
+				// 		이는 주변화 과정에서 이 포인트의 깊이 값이 거의 변하지지 않도록 "고정"하는 효과를 준다.
+				//		신뢰할 수 있는 깊이 정보를 기반으로 제약 조건을 만들기 위함이다.
+				p->priorF *= setting_idepthFixPriorMargFac; // 600 * 600
+
+				// 1-2. 이 포인트가 관측 된 프레임 쌍(host-target)간의 연결성 맵을 업데이트 한다.
+				for(EFResidual* r : p->residualsAll) // 포인트에 연결 된 잔차를 순회
+					if(r->isActive()) // 활성이며 good이면,
+                        connectivityMap[(((uint64_t)r->host->frameID) << 32) + ((uint64_t)r->target->frameID)][1]++; // 엣지에 연결성 추가
+			    // 1-3. 주변화 할 목록에 점 추가한다.
+				allPointsToMarg.push_back(p); 
 			}
 		}
 	}
 
+	// 2. 주변화할 포인트들의 정보 (Hessian, b-vector)를 계산하기 위한 누적기(accumulator) 초기화.
 	accSSE_bot->setZero(nFrames);
 	accSSE_top_A->setZero(nFrames);
+	
+	// 3. 주변화할 각 포인트 대해 정보 추출 및 제거
 	for(EFPoint* p : allPointsToMarg)
 	{
-		accSSE_top_A->addPoint<2>(p,this);
-		accSSE_bot->addPoint(p,false);
+		// 3-1. 포인트의 정보를 Hessian과 b-vector에 누적한다.
+		//		- accSSE_top_A: H_cc, H_cp, b_c 등 카메라와 관련된 부분을 계산한다.
+		//		- accSSE_bot  : H_pp, H_pc, b_p 등 포인트와 관련된 부분을 계산한다.
+		accSSE_top_A->addPoint<2>(p,this); //주변화 모드로 역깊이 관련 H,J,r 계산
+		accSSE_bot->addPoint(p,false); // 최적화 이후 호출 되므로 안에 값 보장, 슈어 보수 관련(H_dd, H_cd)
+
+		// 3-2. 정보 추출이 끝난 포인트는 최적화 시스템(EnergyFunctional)에서 완전히 제거한다.
 		removePoint(p);
 	}
+
+	// 4. 누적된 정보로부터 전체 H, b 행렬(M, Mb)과 슈어 보수항(Msc, Mbsc)을 조립한다.
 	MatXX M, Msc;
 	VecX Mb, Mbsc;
-	accSSE_top_A->stitchDouble(M,Mb,this,false,false);
+	accSSE_top_A->stitchDouble(M,Mb,this,false,false); // stitch가 꾀맨다는 뜻으로, 조립과 상통하는듯.
 	accSSE_bot->stitchDouble(Msc,Mbsc,this);
 
-	resInM+= accSSE_top_A->nres[0];
+	resInM+= accSSE_top_A->nres[0]; // 통계용: 주변화된 잔차 수 업데이트
 
+	// 5. 슈어 보수를 적용하여 포인트 변수를 소거하고, 카메라 변수에 대한 정보만을 남긴다.
+	//	  H_cam = H_cc - H_cp * H_pp^-1 * H_pc
 	MatXX H =  M-Msc;
     VecX b =  Mb-Mbsc;
 
+	// 6. (Option) 시스템의 게이지 자유도를 제거하기 위해 영공간 직교화 수행
 	if(setting_solverMode & SOLVER_ORTHOGONALIZE_POINTMARG)
 	{
 		// have a look if prior is there.
@@ -694,12 +722,17 @@ void EnergyFunctional::marginalizePointsF()
 
 	}
 
+	// 7. 최종적으로 계산된 H, b를 시스템의 전역 사전 정보(Prior)인 HM, bM에 더해준다.
+	//    setting_margWeightFac은 부정확한 선형화 지점으로 인한 오차를 줄이기 위한 가중치.
 	HM += setting_margWeightFac*H;
 	bM += setting_margWeightFac*b;
 
+	
+	//8. (Option) 전체 사전 정보에 대해 다시 한번 직교화를 수행
 	if(setting_solverMode & SOLVER_ORTHOGONALIZE_FULL)
 		orthogonalize(&bM, &HM);
 
+	// 9. 포인트가 제거되었으므로, 인덱스를 다시 빌드하여 유효성 확보.
 	EFIndicesValid = false;
 	makeIDX();
 }

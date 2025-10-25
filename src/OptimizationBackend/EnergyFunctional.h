@@ -165,8 +165,8 @@ public:
 	std::vector<EFFrame*> frames; // 최적화 윈도우 내의 모든 활성 키프레임.
 	int nPoints, nFrames, nResiduals; // 현재 그래프에 포함된 포인트, 프레임, 잔차의 총 개수.
 
-	MatXX HM; // 주변화된(Marginalized) 부분의 헤시안 행렬 (Prior 정보).
-	VecX bM;  // 주변화된(Marginalized) 부분의 b 벡터 (Prior 정보).
+	MatXX HM; // 주변화가 완료 된(Marginalization done) 새로운 헤시안 행렬 (Prior 정보).
+	VecX bM;  // 주변화가 완료 된(Marginalization done) 새로운 b 벡터 (Prior 정보).
 
 	int resInA, resInL, resInM; // 각각 Active, Linearized, Marginalized 상태에 있는 잔차의 개수.
 	MatXX lastHS; // 마지막으로 계산된 전체 헤시안 행렬 (Schur-complement 이전).
@@ -234,11 +234,11 @@ private:
 	VecCf cPriorF;
 
 	// SSE 최적화를 사용한 헤시안 누적기.
-	AccumulatedTopHessianSSE* accSSE_top_L;
-	AccumulatedTopHessianSSE* accSSE_top_A;
+	AccumulatedTopHessianSSE* accSSE_top_L; // for linearized?
+	AccumulatedTopHessianSSE* accSSE_top_A; // for Active Residuals?
 
 
-	AccumulatedSCHessianSSE* accSSE_bot;
+	AccumulatedSCHessianSSE* accSSE_bot;    // schur complement용?
 
 	std::vector<EFPoint*> allPoints; // 모든 포인트에 대한 포인터 벡터 (반복문 최적화용).
 	std::vector<EFPoint*> allPointsToMarg; // 주변화할 포인트에 대한 포인터 벡터.

@@ -35,7 +35,16 @@ namespace dso
 {
 
 
-
+/**
+ * @brief 세 가지 누적 모드로 포인트를 추가한다.
+ * @details mode 0(Active)      : `rJ->resF(현재 반복에서 계산된 최신 잔차)를 사용한다.
+ * 			mode 1(Linearized)  : `r->res_toZeroF`(선형화 지점의 잔차)와 현재 상태와의 
+ * 								  차이(`delta`)를 이용해 잔차를 근사.
+ * 			mode 2(Marginalized): `r->res_toZeoF`(선형화 지점의 잔차)를 직접 사용한다.
+ * @param p 추가될 포인트
+ * @param ef 백엔드 시스템
+ * @param tid target ID
+ */
 template<int mode>
 void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * const ef, int tid)	// 0 = active, 1 = linearized, 2=marginalize
 {
@@ -43,8 +52,8 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 
 	assert(mode==0 || mode==1 || mode==2);
 
-	VecCf dc = ef->cDeltaF;
-	float dd = p->deltaF;
+	VecCf dc = ef->cDeltaF; // 내부 파라미터의 차이
+	float dd = p->deltaF;   // 역깊이의 차이
 
 	float bd_acc=0;
 	float Hdd_acc=0;
@@ -52,6 +61,7 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 
 	for(EFResidual* r : p->residualsAll)
 	{
+		// 활성 포인트, 이미 선형화는된 포인트는 추가될 수 없다. 돌아가라.
 		if(mode==0)
 		{
 			if(r->isLinearized || !r->isActive()) continue;
@@ -63,64 +73,80 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 		if(mode==2)
 		{
 			if(!r->isActive()) continue;
-			assert(r->isLinearized);
+			assert(r->isLinearized); // 잔차가 "절대" 선형화 되지 않는 상태라는것을 보증
 		}
 
 
-		RawResidualJacobian* rJ = r->J;
-		int htIDX = r->hostIDX + r->targetIDX*nframes[tid];
-		Mat18f dp = ef->adHTdeltaF[htIDX];
+		// 3. Jacobian을 가져온다. Jacobian은 PointFrameResidual::linearize()에서 계산 된다.
+		RawResidualJacobian* rJ = r->J; // 마지막 선형화 시점의 Jacobian J(x_0)
+		int htIDX = r->hostIDX + r->targetIDX*nframes[tid]; //? host to target index
+		Mat18f dp = ef->adHTdeltaF[htIDX]; // Δξ, Δa, Δb: 포즈 및 광도 파라미터 변화량
 
 
 
-		VecNRf resApprox;
+		VecNRf resApprox; // 계산될 근사 잔차 r(x)를 저장할 변수; 최대 포인트 개수만큼의 크기
 		if(mode==0)
 			resApprox = rJ->resF;
 		if(mode==2)
 			resApprox = r->res_toZeroF;
 		if(mode==1)
 		{
-			// compute Jp*delta
+			// 4. JΔx 항 계산 (SIMD를 위한 준비 단계)
+			// d[u,v]/d [xi, c, idepth] = d[u,v]/d[xi] * delta[xi] + d[u,v]/d[c] * delta[c] + d[u,v]/d[idepth] * delta[idepth]
+			// compute Jp*delta; 변수가 연산한 값을 인자로 받기에, 각 변수 값을 임시 객체에서 SIMD registor로 복사한다.
+			// _mm_set1_ps는 네 개의 32bit float 값 모두 동일한 값을 복사한다. 즉, _mm_set1_ps(5.0f) -> [5.0f, 5.0f, 5.0f, 5.0f]
 			__m128 Jp_delta_x = _mm_set1_ps(rJ->Jpdxi[0].dot(dp.head<6>())+rJ->Jpdc[0].dot(dc)+rJ->Jpdd[0]*dd);
 			__m128 Jp_delta_y = _mm_set1_ps(rJ->Jpdxi[1].dot(dp.head<6>())+rJ->Jpdc[1].dot(dc)+rJ->Jpdd[1]*dd);
-			__m128 delta_a = _mm_set1_ps((float)(dp[6]));
-			__m128 delta_b = _mm_set1_ps((float)(dp[7]));
+			
+			// Δ[a]
+			__m128 delta_a = _mm_set1_ps((float)(dp[6])); // dr/da * delta[a]
+			//  Δ[b]
+			__m128 delta_b = _mm_set1_ps((float)(dp[7])); // dr/db * delta[b]
 
+			// 5. r(x) ≈ r(x₀) + JΔx 계산 (SIMD 연산)
 			for(int i=0;i<patternNum;i+=4)
 			{
-				// PATTERN: rtz = resF - [JI*Jp Ja]*delta.
-				__m128 rtz = _mm_load_ps(((float*)&r->res_toZeroF)+i);
+				// PATTERN: rtz += resF - [JI*Jp Ja]*delta.
+				__m128 rtz = _mm_load_ps(((float*)&r->res_toZeroF)+i); // r(x_0)를 할당
+
+				// rJ->JIdx와 Jp_delta_x를 곱하면, 
+				//d[r]/d[u,v] * d[u,v]/d[xi, c, idepth] * Δ[xi, c, idepth] 
+				// = d[r]/d[xi, c, idepth] * Δ[xi, c, idepth]
 				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JIdx))+i),Jp_delta_x));
 				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JIdx+1))+i),Jp_delta_y));
 				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JabF))+i),delta_a));
 				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JabF+1))+i),delta_b));
-				_mm_store_ps(((float*)&resApprox)+i, rtz);
+				_mm_store_ps(((float*)&resApprox)+i, rtz); // cpu 변수인 resApprox로 저장
 			}
 		}
 
+		// 6.b= -J*r(x_0)에서, J를 구성하기 위함이다.
 		// need to compute JI^T * r, and Jab^T * r. (both are 2-vectors).
-		Vec2f JI_r(0,0);
-		Vec2f Jab_r(0,0);
+		Vec2f JI_r(0,0); // r(x_0) * d[I]/d[u,v]
+		Vec2f Jab_r(0,0); // r(x_0) * d[i]/d[a,b]
 		float rr=0;
 		for(int i=0;i<patternNum;i++)
 		{
-			JI_r[0] += resApprox[i] *rJ->JIdx[0][i];
-			JI_r[1] += resApprox[i] *rJ->JIdx[1][i];
-			Jab_r[0] += resApprox[i] *rJ->JabF[0][i];
-			Jab_r[1] += resApprox[i] *rJ->JabF[1][i];
-			rr += resApprox[i]*resApprox[i];
+			JI_r[0] += resApprox[i] *rJ->JIdx[0][i]; // r(x_0) * d[I]/d[u]
+			JI_r[1] += resApprox[i] *rJ->JIdx[1][i]; // r(x_0) * d[I]/d[v]
+			Jab_r[0] += resApprox[i] *rJ->JabF[0][i]; // r(x_0) * d[I]/d[a]
+			Jab_r[1] += resApprox[i] *rJ->JabF[1][i]; // r(x_0) * d[i]/d[b]
+			rr += resApprox[i]*resApprox[i]; //r^2
 		}
 
 
+		// 아마도 H_cc
 		acc[tid][htIDX].update(
 				rJ->Jpdc[0].data(), rJ->Jpdxi[0].data(),
 				rJ->Jpdc[1].data(), rJ->Jpdxi[1].data(),
 				rJ->JIdx2(0,0),rJ->JIdx2(0,1),rJ->JIdx2(1,1));
 
+		// 아마도 H_dd
 		acc[tid][htIDX].updateBotRight(
 				rJ->Jab2(0,0), rJ->Jab2(0,1), Jab_r[0],
 				rJ->Jab2(1,1), Jab_r[1],rr);
 
+		// 아마도 H_cd
 		acc[tid][htIDX].updateTopRight(
 				rJ->Jpdc[0].data(), rJ->Jpdxi[0].data(),
 				rJ->Jpdc[1].data(), rJ->Jpdxi[1].data(),
@@ -130,8 +156,11 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 
 
 		Vec2f Ji2_Jpdd = rJ->JIdx2 * rJ->Jpdd;
-		bd_acc +=  JI_r[0]*rJ->Jpdd[0] + JI_r[1]*rJ->Jpdd[1];
-		Hdd_acc += Ji2_Jpdd.dot(rJ->Jpdd);
+
+		// bd_acc은 b=J^T*r이 아니라, J^T*r의 "일부"; b_d = d[r]/d[idepth]^T * r
+		// bd_acc += r(x_0) * d[I]/d[u,v] * d[u, v] / d[idepth]
+		bd_acc +=  JI_r[0]*rJ->Jpdd[0] + JI_r[1]*rJ->Jpdd[1]; // 즉, idepth에 대한 b만을 계산. for loop에 +=는 패턴 덧셈
+		Hdd_acc += Ji2_Jpdd.dot(rJ->Jpdd); // idepth 부분에 
 		Hcd_acc += rJ->Jpdc[0]*Ji2_Jpdd[0] + rJ->Jpdc[1]*Ji2_Jpdd[1];
 
 		nres[tid]++;
