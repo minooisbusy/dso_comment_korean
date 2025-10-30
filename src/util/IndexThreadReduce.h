@@ -44,17 +44,20 @@ public:
 
 	inline IndexThreadReduce()
 	{
+		// 1. 인덱스 및 스텝 크기 초기화
 		nextIndex = 0;
 		maxIndex = 0;
 		stepSize = 1;
+		// 2. ??
 		callPerIndex = boost::bind(&IndexThreadReduce::callPerIndexDefault, this, _1, _2, _3, _4);
 
 		running = true;
+		// 
 		for(int i=0;i<NUM_THREADS;i++)
 		{
 			isDone[i] = false;
 			gotOne[i] = true;
-			workerThreads[i] = boost::thread(&IndexThreadReduce::workerLoop, this, i);
+			workerThreads[i] = boost::thread(&IndexThreadReduce::workerLoop, this, i); // `this`는 멤버 함수를 호출하기 때문.
 		}
 
 	}
@@ -86,18 +89,18 @@ public:
 //		}
 
 
-
+		// stepSize가 0이면, 스레드 개수만큼 일감을 균등하게 나눈다.
 		if(stepSize == 0)
-			stepSize = ((end-first)+NUM_THREADS-1)/NUM_THREADS;
+			stepSize = ((end-first)+NUM_THREADS-1)/NUM_THREADS; // first=0, end=0 인경우 stepSize는 계속 0??
 
 
 		//printf("reduce called\n");
 
-		boost::unique_lock<boost::mutex> lock(exMutex);
+		boost::unique_lock<boost::mutex> lock(exMutex); // 수동으로 lock/unlock 할 수 있음.
 
 		// save
-		this->callPerIndex = callPerIndex;
-		nextIndex = first;
+		this->callPerIndex = callPerIndex; // 함수 설정
+		nextIndex = first;                 
 		maxIndex = end;
 		this->stepSize = stepSize;
 
@@ -109,15 +112,16 @@ public:
 		}
 
 		// let them start!
-		todo_signal.notify_all();
+		todo_signal.notify_all(); // 스레드들을 깨운다 => 스레드들이 일을 시작한다.
 
 
 		//printf("reduce waiting for threads to finish\n");
+		// 이전 멀티스레딩이 끝날 때까지 기다림.
 		// wait for all worker threads to signal they are done.
 		while(true)
 		{
 			// wait for at least one to finish
-			done_signal.wait(lock);
+			done_signal.wait(lock); // unlock 될 때까지 기다린다.
 			//printf("thread finished!\n");
 
 			// check if actually all are finished.
@@ -132,6 +136,7 @@ public:
 
 		nextIndex = 0;
 		maxIndex = 0;
+		// Functor를 다시 default으로 되돌림.
 		this->callPerIndex = boost::bind(&IndexThreadReduce::callPerIndexDefault, this, _1, _2, _3, _4);
 
 		//printf("reduce done (all threads finished)\n");
@@ -196,12 +201,12 @@ private:
 			// otherwise wait on signal, releasing lock in the meantime.
 			else
 			{
-				if(!gotOne[idx])
+				if(!gotOne[idx]) // min=0, max=0인 경우 각 스레드에서 한 번씩 실행 됨.
 				{
 					lock.unlock();
 					assert(callPerIndex != 0);
 					Running s; memset(&s, 0, sizeof(Running));
-					callPerIndex(0, 0, &s, idx);
+					callPerIndex(0, 0, &s, idx); // idx는 스레드 아이디
 					gotOne[idx] = true;
 					lock.lock();
 					stats += s;

@@ -51,7 +51,7 @@ void EFResidual::takeDataF()
 	for(int i=0;i<6;i++)
 	 	// Jpdxi=d[u]/d[xi]: (2x6), JI_JI_Jd: (2x1)
 		JpJdF[i] = J->Jpdxi[0][i]*JI_JI_Jd[0] + J->Jpdxi[1][i] * JI_JI_Jd[1];
-		//? JpJdF는 뭘까? -> Hessian에서 이미지점에 대한 포즈 $\xi$ 미분과 잔차에 깊이에 대한 미분의 곱셈
+		// JpJdF는 뭘까? -> Hessian에서 이미지점에 대한 포즈 $\xi$ 미분과 잔차에 깊이에 대한 미분의 곱셈
 
 	JpJdF.segment<2>(6) = J->JabJIdx*J->Jpdd;// 6번째 원소부터 2개를 우변과 같이 설정한다; photometric calibration(a,b)에 대한 항이다.
 }

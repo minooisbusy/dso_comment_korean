@@ -145,12 +145,12 @@ public:
 	// contains all residuals.
 	std::vector<EFResidual*> residualsAll; // 하나의 EFPoint에 대해 host에 대한 target"s"의 residual
 
-	float bdSumF;
-	float HdiF;
-	float Hdd_accLF;
-	VecCf Hcd_accLF;
-	float bd_accLF;
-	float Hdd_accAF;
+	float bdSumF;    // b-vector의 depth 성분의 합; bd_accAF + bd_accLF + prior
+	float HdiF;		 // Hessian depth inverse (float); = 1.0f/(Hdd_accAF + Hdd_accLF);
+	float Hdd_accLF; // 선형화된 포인트에 대한 $H_dd$; 역깊이에 관련 된 부분이다.
+	VecCf Hcd_accLF; // 선형화된 포인트에 대한 $H_cd$; 카메라변수와 역깊이의 상호작용 행렬
+	float bd_accLF;  // 선형화 된 포인트에 대한 b-벡터의 depth 성분.$-J_d^T r$을 합산하여 얻는다.
+	float Hdd_accAF; // 활성 포인트에 대한 $H_dd$; 역깊이에 관련 된 부분이다.
 	VecCf Hcd_accAF;
 	float bd_accAF;
 

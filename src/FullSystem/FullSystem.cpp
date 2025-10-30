@@ -532,7 +532,7 @@ void FullSystem::activatePointsMT_Reductor(
  */
 void FullSystem::activatePointsMT()
 {
-	// 추적점의 개수(희소성) 조절
+	// 1. 추적점의 개수(희소성) 조절
 	if(ef->nPoints < setting_desiredPointDensity*0.66)
 		currentMinActDist -= 0.8;
 	if(ef->nPoints < setting_desiredPointDensity*0.8)
@@ -559,7 +559,7 @@ void FullSystem::activatePointsMT()
                 currentMinActDist, (int)(setting_desiredPointDensity), ef->nPoints);
 
 
-	// 각 픽셀에 가장 가까운 활성 포인트까지 거리를 계산함
+	// 1-1. 각 픽셀에 가장 가까운 활성 포인트까지 거리를 계산함
 	FrameHessian* newestHs = frameHessians.back();
 
 	// make dist map.
@@ -568,20 +568,25 @@ void FullSystem::activatePointsMT()
 
 	//coarseTracker->debugPlotDistMap("distMap");
 
-	// 필터링 시작
+	// 2. 필터링 시작
 	std::vector<ImmaturePoint*> toOptimize; toOptimize.reserve(20000);
 
 
 	for(FrameHessian* host : frameHessians)		// go through all active frames
 	{
-		if(host == newestHs) continue;
+		if(host == newestHs) continue; // 본인 제외
 
+		// 2-1. 공통 된 기하학적 행렬 계산
+		/// host to target (relative) pose
 		SE3 fhToNew = newestHs->PRE_worldToCam * host->PRE_camToWorld;
+		/// Intrinsics * Rotation * Inverse intrinsics
 		Mat33f KRKi = (coarseDistanceMap->K[1] * fhToNew.rotationMatrix().cast<float>() * coarseDistanceMap->Ki[0]);
+		/// Intrinsics * translation
 		Vec3f Kt = (coarseDistanceMap->K[1] * fhToNew.translation().cast<float>());
 
 
-		for(unsigned int i=0;i<host->immaturePoints.size();i+=1) // go through immature points of active frames.
+		// 2-2. host의 immaturePoint 순회하며 제거할 포인트 선택
+		for(unsigned int i=0;i<host->immaturePoints.size();i+=1) 
 		{
 			ImmaturePoint* ph = host->immaturePoints[i];
 			ph->idxInImmaturePoints = i;
@@ -592,7 +597,7 @@ void FullSystem::activatePointsMT()
 //				immature_invalid_deleted++;
 				// remove point.
 				delete ph;
-				host->immaturePoints[i]=0;
+				host->immaturePoints[i]=0; // 선택
 				continue;
 			}
 
@@ -606,7 +611,8 @@ void FullSystem::activatePointsMT()
 							&& (ph->idepth_max+ph->idepth_min) > 0;
 
 
-			// if I cannot activate the point, skip it. Maybe also delete it.
+			// 위 `canActivate` 기준에 만족하지 못하면 skip!
+			// 혹은 호스트가 주변화 플래그 되거나, ImmaturePoint(`ph`)가 OOB이면 `ph` 제거!
 			if(!canActivate)
 			{
 				// if point will be out afterwards, delete it instead.
@@ -626,6 +632,7 @@ void FullSystem::activatePointsMT()
 			int u = ptp[0] / ptp[2] + 0.5f;
 			int v = ptp[1] / ptp[2] + 0.5f;
 
+			// Target image (입력 인자)에 투영 되면
 			if((u > 0 && v > 0 && u < wG[1] && v < hG[1]))
 			{
 
@@ -634,13 +641,13 @@ void FullSystem::activatePointsMT()
 				if(dist>=currentMinActDist* ph->my_type)
 				{
 					coarseDistanceMap->addIntoDistFinal(u,v);
-					toOptimize.push_back(ph);
+					toOptimize.push_back(ph); // 최적화할 점 목록에 ImmaturePoint 추가
 				}
 			}
 			else
 			{
 				delete ph;
-				host->immaturePoints[i]=0;
+				host->immaturePoints[i]=0; // 제거할 점으로 선택
 			}
 		}
 	}
@@ -649,7 +656,7 @@ void FullSystem::activatePointsMT()
 //	printf("ACTIVATE: %d. (del %d, notReady %d, marg %d, good %d, marg-skip %d)\n",
 //			(int)toOptimize.size(), immature_deleted, immature_notReady, immature_needMarg, immature_want, immature_margskip);
 
-	/* 최적화 시작 */
+	// 3. 최적화 시작
 	std::vector<PointHessian*> optimized; optimized.resize(toOptimize.size());
 
 	if(multiThreading)
@@ -659,7 +666,7 @@ void FullSystem::activatePointsMT()
 		activatePointsMT_Reductor(&optimized, &toOptimize, 0, toOptimize.size(), 0, 0);
 
 
-	// EnergyFunctional, EFFrame, EFPoint, FrameHessian, PointHessian 연결
+	// 최적화 후, ImmaturePoinr를 EnergyFunctional, EFFrame, EFPoint, FrameHessian, PointHessian 연결
 	for(unsigned k=0;k<toOptimize.size();k++)
 	{
 		PointHessian* newpoint = optimized[k];
@@ -1110,10 +1117,11 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 
 
 	// =========================== add new residuals for old points =========================
+	// 호스트가 기존 키프레임인 포인트와 타겟이 새키프레임(인자)인 잔차를 추가한다.
 	int numFwdResAdde=0;
 	for(FrameHessian* fh1 : frameHessians)		// go through all active frames
 	{
-		if(fh1 == fh) continue;
+		if(fh1 == fh) continue; // 잔차 순회이므로 자신과 연결은 의미 없다.
 		for(PointHessian* ph : fh1->pointHessians)
 		{
 			PointFrameResidual* r = new PointFrameResidual(ph, fh1, fh);
@@ -1122,7 +1130,7 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 			ef->insertResidual(r);
 			ph->lastResiduals[1] = ph->lastResiduals[0];
 			ph->lastResiduals[0] = std::pair<PointFrameResidual*, ResState>(r, ResState::IN);
-			numFwdResAdde+=1;
+			numFwdResAdde+=1; // debugging; Number of Forward Residuals Added: 순방향(old to new) 잔차 개수
 		}
 	}
 
@@ -1131,7 +1139,7 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 
 	// =========================== Activate Points (& flag for marginalization). =========================
 	activatePointsMT(); // ImmaturePoint to PointHessian, connect to EnergyFunctional
-	ef->makeIDX();
+	ef->makeIDX();      // EnergyFunctional에서 키프레임 인덱스, 잔차 쌍 인덱스 갱신
 
 
 
@@ -1139,7 +1147,7 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 	// =========================== OPTIMIZE ALL =========================
 
 	fh->frameEnergyTH = frameHessians.back()->frameEnergyTH;
-	float rmse = optimize(setting_maxOptIterations);
+	float rmse = optimize(setting_maxOptIterations); // 활성 키프레임 목록의 상태변수 최적화
 
 
 
@@ -1181,7 +1189,7 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 	{
 		boost::unique_lock<boost::mutex> crlock(coarseTrackerSwapMutex);
 		coarseTracker_forNewKF->makeK(&Hcalib);
-		coarseTracker_forNewKF->setCoarseTrackingRef(frameHessians);
+		coarseTracker_forNewKF->setCoarseTrackingRef(frameHessians); // idepthmap, aff_g2l 초기화
 
 
 
@@ -1206,12 +1214,12 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 			ef->lastNullspaces_scale,
 			ef->lastNullspaces_affA,
 			ef->lastNullspaces_affB);
-	ef->marginalizePointsF();
+	ef->marginalizePointsF(); // PS_MARGINALIZE인 포인트들에서 정보 뽑아 주변화 된 HM, bM 계산
 
 
 
 	// =========================== add new Immature points & new residuals =========================
-	makeNewTraces(fh, 0);
+	makeNewTraces(fh, 0); // 직접적으로 residual을 추가하지는 않는다.
 
 
 

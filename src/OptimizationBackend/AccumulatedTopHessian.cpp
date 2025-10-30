@@ -36,14 +36,16 @@ namespace dso
 
 
 /**
- * @brief 세 가지 누적 모드로 포인트를 추가한다.
+ * @brief 포인트 하나가 가진 모든 잔차 정보를 세 가지 모드 중 하나로 분해하여 Hessian과 b-vector에 누적합니다.
+ *        카메라 파라미터(c, xi, a, b) 관련 정보는 `acc` 행렬에,
+ *        포인트의 역깊이(idepth) 관련 정보는 `EFPoint`의 멤버 변수(Hdd_acc*, bd_acc*)에 누적됩니다.
  * @details mode 0(Active)      : `rJ->resF(현재 반복에서 계산된 최신 잔차)를 사용한다.
  * 			mode 1(Linearized)  : `r->res_toZeroF`(선형화 지점의 잔차)와 현재 상태와의 
  * 								  차이(`delta`)를 이용해 잔차를 근사.
  * 			mode 2(Marginalized): `r->res_toZeoF`(선형화 지점의 잔차)를 직접 사용한다.
  * @param p 추가될 포인트
  * @param ef 백엔드 시스템
- * @param tid target ID
+ * @param tid 스레드 ID (Thread ID)
  */
 template<int mode>
 void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * const ef, int tid)	// 0 = active, 1 = linearized, 2=marginalize
@@ -79,7 +81,7 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 
 		// 3. Jacobian을 가져온다. Jacobian은 PointFrameResidual::linearize()에서 계산 된다.
 		RawResidualJacobian* rJ = r->J; // 마지막 선형화 시점의 Jacobian J(x_0)
-		int htIDX = r->hostIDX + r->targetIDX*nframes[tid]; //? host to target index
+		int htIDX = r->hostIDX + r->targetIDX*nframes[tid]; // host to target index
 		Mat18f dp = ef->adHTdeltaF[htIDX]; // Δξ, Δa, Δb: 포즈 및 광도 파라미터의 "상대적" 변화량(Target frame에서 변화량)
 
 
@@ -91,7 +93,7 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 			resApprox = r->res_toZeroF;
 		if(mode==1)
 		{
-			// 4. JΔx 항 계산 (SIMD를 위한 준비 단계)
+			// 4. JΔx 항 계산 (SIMD를 위한 준비 단계) 이들은 J_local을 구성한다.
 			// d[u,v]/d [xi, c, idepth] = d[u,v]/d[xi] * delta[xi] + d[u,v]/d[c] * delta[c] + d[u,v]/d[idepth] * delta[idepth]
 			// compute Jp*delta; 변수가 연산한 값을 인자로 받기에, 각 변수 값을 임시 객체에서 SIMD registor로 복사한다.
 			// _mm_set1_ps는 네 개의 32bit float 값 모두 동일한 값을 복사한다. 즉, _mm_set1_ps(5.0f) -> [5.0f, 5.0f, 5.0f, 5.0f]
@@ -110,12 +112,12 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 				__m128 rtz = _mm_load_ps(((float*)&r->res_toZeroF)+i); // r(x_0)를 할당
 
 				// rJ->JIdx와 Jp_delta_x를 곱하면, 
-				//d[r]/d[u,v] * d[u,v]/d[xi, c, idepth] * Δ[xi, c, idepth] 
+				//d[r]/d[u,v] * d[u,v]/d[xi, c, idepth] * Δ[xi, c, idepth] + d[r]/d[a] *  Δ[a] + d[r]/d[b] *  Δ[b]
 				// = d[r]/d[xi, c, idepth] * Δ[xi, c, idepth]
 				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JIdx))+i),Jp_delta_x));
 				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JIdx+1))+i),Jp_delta_y));
-				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JabF))+i),delta_a));
-				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JabF+1))+i),delta_b));
+				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JabF))+i),delta_a));      // d[r]/d[a] *  Δ[a]
+				rtz = _mm_add_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(rJ->JabF+1))+i),delta_b));    // d[r]/d[b] *  Δ[b]
 				_mm_store_ps(((float*)&resApprox)+i, rtz); // cpu 변수인 resApprox로 저장
 			}
 		}
@@ -127,14 +129,15 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 		float rr=0;
 		for(int i=0;i<patternNum;i++)
 		{
-			JI_r[0] += resApprox[i] *rJ->JIdx[0][i]; // r(x_0) * d[I]/d[u]
-			JI_r[1] += resApprox[i] *rJ->JIdx[1][i]; // r(x_0) * d[I]/d[v]
+			JI_r[0] += resApprox[i] *rJ->JIdx[0][i];  // r(x_0) * d[I]/d[u]
+			JI_r[1] += resApprox[i] *rJ->JIdx[1][i];  // r(x_0) * d[I]/d[v]
 			Jab_r[0] += resApprox[i] *rJ->JabF[0][i]; // r(x_0) * d[I]/d[a]
 			Jab_r[1] += resApprox[i] *rJ->JabF[1][i]; // r(x_0) * d[i]/d[b]
 			rr += resApprox[i]*resApprox[i]; //r^2
 		}
 
 
+		//아래는 대입이 아닌 "누적"이다.
 		// H_cc
 		acc[tid][htIDX].update( // 계산 H_cc ≈ (∂p/∂x_cam)ᵀ * ((∂r/∂p)ᵀ(∂r/∂p)) * (∂p/∂x_cam)
 				rJ->Jpdc[0].data(), rJ->Jpdxi[0].data(),
@@ -157,6 +160,7 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 
 		Vec2f Ji2_Jpdd = rJ->JIdx2 * rJ->Jpdd;
 
+		// 여기서 idepth에 관련된 값들을 계산한다.(이전까지는 4+6+2개 계산)
 		// bd_acc은 b=J^T*r이 아니라, J^T*r의 "일부"; b_d = d[r]/d[idepth]^T * r
 		// bd_acc += r(x_0) * d[I]/d[u,v] * d[u, v] / d[idepth]
 		bd_acc +=  JI_r[0]*rJ->Jpdd[0] + JI_r[1]*rJ->Jpdd[1]; // 즉, idepth에 대한 b만을 계산. for loop에 +=는 패턴 덧셈
@@ -178,7 +182,7 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 		p->bd_accLF = bd_acc;
 		p->Hcd_accLF = Hcd_acc;
 	}
-	if(mode==2)
+	if(mode==2) //? 왜 얘는 0으로 만드는거지?
 	{
 		p->Hcd_accAF.setZero();
 		p->Hdd_accAF = 0;
@@ -195,8 +199,9 @@ template void AccumulatedTopHessianSSE::addPoint<2>(EFPoint* p, EnergyFunctional
 
 
 
-
-
+/**
+ * @brief 이전에 계산 된 Hessian의 요소들을 최종적으로 결합하여 (주변화 된) "전역" Hessian 및 b-vector 계산
+ */
 void AccumulatedTopHessianSSE::stitchDouble(MatXX &H, VecX &b, EnergyFunctional const * const EF, bool usePrior, bool useDelta, int tid)
 {
 	// 1. Hessian과 b-vector를 프레임 개수x(포즈+ab)(8) + 내부 파라미터 개수(4)의 크기로 할당하고 0으로 초기화 한다. 
@@ -222,11 +227,15 @@ void AccumulatedTopHessianSSE::stitchDouble(MatXX &H, VecX &b, EnergyFunctional 
 
 
 			// 4. Adjoint 행렬을 사용하여 누적된 정보를 전체 H, b에 조립한다.
-			// accH는 target 프레임의 지역 좌표계 기준 정보이므로,
+			// accH는 target 프레임의 "지역 좌표계" 기준 정보이므로,
 			// Adjoint 행렬(EF->adHost, EF->adTarget)을 사용해 전역 좌표계로 변환하여 더해준다.
 			// 이 과정은 J_global = J_local * Adjoint와 유사한 변환을 H행렬에 적용하는 것이다.
+			// J_global = J_local * Adjoint가 된다. => "note; J_global = J_local x adjoint.md" 참조
 
 			// H 행렬의 대각 블록 (H_hh, H_tt) 업데이트
+			// J_local = [J_HT, J_d]
+			// J_global = [J_H, H_T, J_d]
+			// d[xi_HT] = d[xi_T] - Ad_{T_TH} d[\xi_H]
 			H.block<8,8>(hIdx, hIdx).noalias() += EF->adHost[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adHost[aidx].transpose();
 			H.block<8,8>(tIdx, tIdx).noalias() += EF->adTarget[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adTarget[aidx].transpose();
 
@@ -281,6 +290,7 @@ void AccumulatedTopHessianSSE::stitchDoubleInternal(
 		MatXX* H, VecX* b, EnergyFunctional const * const EF, bool usePrior,
 		int min, int max, Vec10* stats, int tid)
 {
+	// 병렬 처리 시, 모든 스레드의 계산 결과를 합산해야 하므로 NUM_THREADS로 설정된다.
 	int toAggregate = NUM_THREADS;
 	if(tid == -1) { toAggregate = 1; tid = 0; }	// special case: if we dont do multithreading, dont aggregate.
 	if(min==max) return;
@@ -288,16 +298,18 @@ void AccumulatedTopHessianSSE::stitchDoubleInternal(
 
 	for(int k=min;k<max;k++)
 	{
-		int h = k%nframes[0];
-		int t = k/nframes[0];
+		// 행 우선 순서(Row-Major Order) 접근, nframes[0]는 행의 개수가 된다.
+		// acc이 행 우선 순서로 되어있다. 즉, 메모리가 a[0][0], a[1][0], ... 순서로 되어 있음.
+		int h = k%nframes[0]; // 행
+		int t = k/nframes[0]; // 열
 
-		int hIdx = CPARS+h*8;
-		int tIdx = CPARS+t*8;
-		int aidx = h+nframes[0]*t;
+		int hIdx = CPARS+h*8; // 행 인덱스
+		int tIdx = CPARS+t*8; // 열 인덱스
+		int aidx = h+nframes[0]*t; // 1차원 배열에서 인덱스 행방향으로 진행 됨.
 
 		assert(aidx == k);
 
-		MatPCPC accH = MatPCPC::Zero();
+		MatPCPC accH = MatPCPC::Zero(); // 하나의 잔차를 위한 accH 선언
 
 		for(int tid2=0;tid2 < toAggregate;tid2++)
 		{

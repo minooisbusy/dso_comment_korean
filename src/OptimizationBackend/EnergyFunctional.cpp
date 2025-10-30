@@ -131,8 +131,8 @@ EnergyFunctional::EnergyFunctional()
 
 	nFrames = nResiduals = nPoints = 0;
 
-	HM = MatXX::Zero(CPARS,CPARS); // 4x4 행렬
-	bM = VecX::Zero(CPARS); // 4-벡터
+	HM = MatXX::Zero(CPARS,CPARS); // 4x4 행렬, 프레임이 없음.
+	bM = VecX::Zero(CPARS); // 4-벡터 프레임이 없음
 
 
 	accSSE_top_L = new AccumulatedTopHessianSSE();
@@ -227,6 +227,12 @@ void EnergyFunctional::accumulateAF_MT(MatXX &H, VecX &b, bool MT) // HA_top, bA
 {
 	if(MT)
 	{
+		// reduce 함수는 첫 번째 인자로 boost::function<void(int,int,Running*,int)> 타입의 함수 객체를 요구합니다.
+		// 하지만 우리가 실제로 호출할 addPointsInternal<0> 함수는 더 많은 인자를 필요로 합니다.
+		// boost::bind는 addPointsInternal<0> 함수와 그 인자들을 묶어 새로운 함수 객체를 생성합니다.
+		// accSSE_top_A, &allPoints, this는 미리 바인딩되는 인자이고,
+		// _1, _2, _3, _4는 reduce 함수가 내부적으로 호출할 때 채워주는 placeholder입니다.
+		// 이렇게 생성된 함수 객체는 reduce가 요구하는 시그니처와 일치하게 됩니다.
 		red->reduce(boost::bind(&AccumulatedTopHessianSSE::setZero, accSSE_top_A, nFrames,  _1, _2, _3, _4), 0, 0, 0);
 		red->reduce(boost::bind(&AccumulatedTopHessianSSE::addPointsInternal<0>,
 				accSSE_top_A, &allPoints, this,  _1, _2, _3, _4), 0, allPoints.size(), 50);
@@ -650,9 +656,9 @@ void EnergyFunctional::marginalizeFrame(EFFrame* fh)
 void EnergyFunctional::marginalizePointsF()
 {
 	// 0. 사전 조건 확인: 최적화에 필요한 값들이 최신 상태인지 확인한다.
-	assert(EFDeltaValid);
-	assert(EFAdjointsValid);
-	assert(EFIndicesValid);
+	assert(EFDeltaValid); // state delta(즉, $\Delta x$)가 계산 되었는지 유효성
+	assert(EFAdjointsValid); // J_global = J_local * Adj 를 계산하기 위한 Adjoint 갱신되었는지에 대한 유효성
+	assert(EFIndicesValid); // 잔차의 인덱스 업데이트 유효성 검사
 
 	// 1. 주변화할 포인트 목록 생성
 	// 		- FullSystem::flagPointsForRemoval() 함수에서 PS_MARGINALIZE 플래그가 설정된
@@ -725,8 +731,8 @@ void EnergyFunctional::marginalizePointsF()
 
 	// 7. 최종적으로 계산된 H, b를 시스템의 전역 사전 정보(Prior)인 HM, bM에 더해준다.
 	//    setting_margWeightFac은 부정확한 선형화 지점으로 인한 오차를 줄이기 위한 가중치.
-	HM += setting_margWeightFac*H;
-	bM += setting_margWeightFac*b;
+	HM += setting_margWeightFac*H; // HM은 주변화(Marginalization)가 완료 된 Hessian
+	bM += setting_margWeightFac*b; // bM은 주변화(Marginalization)이 완료 된 b-vector
 
 	
 	//8. (Option) 전체 사전 정보에 대해 다시 한번 직교화를 수행
@@ -998,6 +1004,10 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 
 
 }
+
+/** 
+ * @brief 키프레임 인덱스와 잔차의 호스트-타겟 인덱스 쌍 갱신
+ */
 void EnergyFunctional::makeIDX()
 {
 	for(unsigned int idx=0;idx<frames.size();idx++) // 새롭게 키프레임이 추가/제거 되었으므로 인덱스 새로 부여

@@ -135,29 +135,37 @@ void CoarseTracker::makeK(CalibHessian* HCalib)
 void CoarseTracker::makeCoarseDepthL0(std::vector<FrameHessian*> frameHessians)
 {
 	// make coarse tracking templates for latstRef.
-	memset(idepth[0], 0, sizeof(float)*w[0]*h[0]);
-	memset(weightSums[0], 0, sizeof(float)*w[0]*h[0]);
+	memset(idepth[0], 0, sizeof(float)*w[0]*h[0]); // 원본 크기의 역깊이 맵 초기화
+	memset(weightSums[0], 0, sizeof(float)*w[0]*h[0]); // 원본 크기의 가중치 합 초기화
 
-	for(FrameHessian* fh : frameHessians)
+	for(FrameHessian* fh : frameHessians) // 키프레임 목록 순회
 	{
-		for(PointHessian* ph : fh->pointHessians)
+		for(PointHessian* ph : fh->pointHessians) // 특정 키프레임의 포인트 순회
 		{
+			//lastResiduals는 참조용 프레임으로 만드려는 프레임에 대한 잔차를 의미한다.
 			if(ph->lastResiduals[0].first != 0 && ph->lastResiduals[0].second == ResState::IN)
 			{
 				PointFrameResidual* r = ph->lastResiduals[0].first;
+				//잔차가 최신 프레임을 타겟으로 하는지 확인
 				assert(r->efResidual->isActive() && r->target == lastRef);
+
+				// 포인트 위치 반올림, 우변의 `centerProjectedTo`는 `linearize()`에서 계산됨
 				int u = r->centerProjectedTo[0] + 0.5f;
 				int v = r->centerProjectedTo[1] + 0.5f;
+
+				// 우변은 언제 계산 된거지?
 				float new_idepth = r->centerProjectedTo[2];
 				float weight = sqrtf(1e-3 / (ph->efPoint->HdiF+1e-12));
 
+				//? [resolved] 왜 누적하는가? 
+				//-> 양자화로 인해 같은 픽셀에 여러 역깊이가 대입될 수 있기 때문.
 				idepth[0][u+w[0]*v] += new_idepth *weight;
 				weightSums[0][u+w[0]*v] += weight;
 			}
 		}
 	}
 
-
+	// 4-이웃에 대한 가중합(가중 평균)
 	for(int lvl=1; lvl<pyrLevelsUsed; lvl++)
 	{
 		int lvlm1 = lvl-1;
@@ -265,7 +273,7 @@ void CoarseTracker::makeCoarseDepthL0(std::vector<FrameHessian*> frameHessians)
 
 				if(weightSumsl[i] > 0)
 				{
-					idepthl[i] /= weightSumsl[i];
+					idepthl[i] /= weightSumsl[i]; // 가중합이 되는 이유!
 					lpc_u[lpc_n] = x;
 					lpc_v[lpc_n] = y;
 					lpc_idepth[lpc_n] = idepthl[i];
@@ -523,12 +531,12 @@ void CoarseTracker::setCoarseTrackingRef(
 {
 	assert(frameHessians.size()>0);
 	lastRef = frameHessians.back();
-	makeCoarseDepthL0(frameHessians);
+	makeCoarseDepthL0(frameHessians); // 투영 된 포인트의 역깊이를 다양한 방식으로 가중합
 
 
 
 	refFrameID = lastRef->shell->id;
-	lastRef_aff_g2l = lastRef->aff_g2l();
+	lastRef_aff_g2l = lastRef->aff_g2l(); // 광도 파라미터 초기화, 이전 값으로.
 
 	firstCoarseRMSE=-1;
 

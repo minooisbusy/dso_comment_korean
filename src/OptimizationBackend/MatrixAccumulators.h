@@ -769,9 +769,9 @@ inline void finish()
 		  const float* const x6, // d[v]/d[c] in 1x6
 		  const float* const y4, // d[u]/d[xi] in 1x4
 		  const float* const y6, // d[v]/d[xi] in 1x6
-		  const float a,
-		  const float b,
-		  const float c)
+		  const float a,		 // rJ->JIdx2(0,0)
+		  const float b,		 // rJ->JIdx2(0,1)
+		  const float c)		 // rJ->JIdx2(1,1)
   {
 	  // H ≈ (∂p/∂x)ᵀ * ((∂r/∂p)ᵀ(∂r/∂p)) * (∂p/∂x)
 	  // H ≈ a*(∂u/∂x)ᵀ(∂u/∂x) + c*(∂v/∂x)ᵀ(∂v/∂x) + b*((∂u/∂x)ᵀ(∂v/∂x) + (∂v/∂x)ᵀ(∂u/∂x))
@@ -924,12 +924,12 @@ inline void finish()
 		  const float a12, // b_ab(1)   = J_b^T * r
 		  const float a22) // sum(r^2)
   {
-	  BotRight_Data[0] += a00;
-	  BotRight_Data[1] += a01;
-	  BotRight_Data[2] += a02;
-	  BotRight_Data[3] += a11;
-	  BotRight_Data[4] += a12;
-	  BotRight_Data[5] += a22;
+	  BotRight_Data[0] += a00; // H_ab(0,0)
+	  BotRight_Data[1] += a01; // H_ab(0,1)
+	  BotRight_Data[2] += a02; // b_ab(0)  
+	  BotRight_Data[3] += a11; // H_ab(1,1)
+	  BotRight_Data[4] += a12; // b_ab(1)  
+	  BotRight_Data[5] += a22; // sum(r^2)
   }
 
 

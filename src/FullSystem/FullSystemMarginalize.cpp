@@ -141,7 +141,7 @@ void FullSystem::flagFramesForMarginalization(FrameHessian* newFH) //! newFH is 
 
 		for(FrameHessian* fh : frameHessians)
 		{
-			//? 안전장치, 프레임 나이(Age)의 차이 보다 크다면?
+			//? [resolved] 안전장치, 프레임 나이(Age)의 차이 보다 크다면?
 			// 활성 키프레임 중 하나의 아이디(등록 순서)가 적어도 lastest와 setting_minFrameAge 만큼 떨어져있어야함. 아니면 주변화 X
 			// 현재 키프레임이 첫 키프레임이면 주변화 하지 않는다.
 			if(fh->frameID > latest->frameID-setting_minFrameAge || fh->frameID == 0) continue;
@@ -191,7 +191,7 @@ void FullSystem::marginalizeFrame(FrameHessian* frame)
 	// marginalize or remove all this frames points.
 	assert((int)frame->pointHessians.size()==0);
 
-	// 2. EnergyFunctional에서 실재 주변화 연산(Schur Complement)을 수행한다.
+	// 2. EnergyFunctional에서 실제 주변화 연산(Schur Complement)을 수행한다.
 	ef->marginalizeFrame(frame->efFrame); // `frame->efFrame`을 주변화 한다.
 
 	// 3. 주변화 된 프레임을 '관측'하던 모든 잔차(residual)들을 제거한다.

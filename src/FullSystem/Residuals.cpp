@@ -84,9 +84,9 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 
 	// 이 잔차에 해당하는 사전에 계산 된 값들을 가져온다.
 	// 값들은 KRKi, 현재 값에서 변환, 초기화 지점에서 변환 등을 포함한다.
-	//! adjoint는 등장하지 않음. 
-	//! 현재 계산은 -> 연쇄법칙의 local Jacobian
-	//! adHostF는 -> 연쇄법칙의 Global transformation matrix
+	//! adjoint는 등장하지 않음. => Local Jacobian을 계산하기 때문이다.
+	//! 현재 계산은 -> 연쇄법칙의 local Jacobian!!
+	//! adHostF는 -> 연쇄법칙의 Global transformation matrix (중요!)
 	FrameFramePrecalc* precalc = &(host->targetPrecalc[target->idx]);
 	float energyLeft=0;
 	const Eigen::Vector3f* dIl = target->dI; // target의 intensity, dx, dy 포인터 획득
@@ -117,6 +117,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 		Vec3f KliP;
 
 		// 보간을 고려한 이미지 영역 내부에 있는지 확인
+		// `drescale`부터 `new_idepth`까지는 출력 변수다.
 		if(!projectPoint(point->u, point->v, point->idepth_zero_scaled, 0, 0,HCalib,
 				PRE_RTll_0,PRE_tTll_0, drescale, u, v, Ku, Kv, KliP, new_idepth))
 			{ state_NewState = ResState::OOB; return state_energy; }
@@ -154,7 +155,8 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 		d_C_y[3] = (d_C_y[3]+1)*SCALE_C;
 
 
-		// pose twist에 대해 u,v 미분 결과
+		// "relative" pose twist($\xi_{HT}$)에 대해 u,v 미분 결과
+		// new_depth, u, v는 확실히 target frame에 projection 된 값이다.
 		d_xi_x[0] = new_idepth*HCalib->fxl();
 		d_xi_x[1] = 0;
 		d_xi_x[2] = -new_idepth*u*HCalib->fxl();
@@ -174,7 +176,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 	// 결과를 RawResidualJacobian*에 저장. 예를 들어 Jpdxi는 point를 xi로 미분.
 	// J_p_d_* 형식. Jacobian point derivatived by *
 	{
-		// d[r]/d[xi]
+		// d[r]/d[xi_HT]
 		J->Jpdxi[0] = d_xi_x;
 		J->Jpdxi[1] = d_xi_y;
 

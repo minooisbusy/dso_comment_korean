@@ -62,6 +62,7 @@ public:
 		}
 	};
 
+	// 각 스레드가 nFrame**2개 만큼의 AccumulatorApprox를 갖는다.
 	inline void setZero(int nFrames, int min=0, int max=1, Vec10* stats=0, int tid=0) // tid: thread id
 	{
 
@@ -123,6 +124,7 @@ public:
 			stitchDoubleInternal(&H, &b, EF, usePrior,0,nframes[0]*nframes[0],0,-1);
 		}
 
+		// 나머지 하삼각행렬을 채운다.
 		// make diagonal by copying over parts.
 		for(int h=0;h<nframes[0];h++)
 		{
