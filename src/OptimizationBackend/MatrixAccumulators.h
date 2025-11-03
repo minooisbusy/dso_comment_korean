@@ -627,6 +627,15 @@ inline void finish()
 	assert(numIn1==0);
 	assert(numIn1k==0);
 
+	/** intrinsics와 pose에 관련 된 local hessian block 계산 
+	 * |H_cc|H_cx|    |    |
+	 * -----+----+----+-----
+	 * |H_xc|H_xx|    |    |
+	 * -----+----+----+-----
+	 * |    |    |    |    |
+	 * -----+----+----+-----
+	 * |    |    |    |    |
+	 */
 	int idx=0;
 	for(int r=0;r<10;r++)
 		for(int c=r;c<10;c++)
@@ -636,13 +645,31 @@ inline void finish()
 		}
 
 	idx=0;
+	/** 아래에서 비대각성분인 두 부분 H_cp, H_cd, H_xp, H_xd를 계산
+	 * |    |    |H_cp|H_cd|
+	 * -----+----+----+-----
+	 * |    |    |H_xp|H_xd|
+	 * -----+----+----+-----
+	 * |H_pc|H_px|    |    |
+	 * -----+----+----+-----
+	 * |H_dc|H_dx|    |    |
+	 */
 	for(int r=0;r<10;r++)
-		for(int c=0; c<3;c++)
+		for(int c=0; c<3;c++) //c=0: a, c=1: b, c=2: idepth
 		{
 			H(r,c+10) = H(c+10,r) = TopRight_Data1m[idx];
 			idx++;
 		}
 
+	/** 아래에서 비대각성분인 두 부분 H_cp, H_cd, H_xp, H_xd를 계산
+	 * |    |    |    |    |
+	 * -----+----+----+-----
+	 * |    |    |    |    |
+	 * -----+---------+-----
+	 * |    |    |H_pp|H_pd|
+	 * -----+---------+-----
+	 * |    |    |H_dp|H_dd|
+	 */
 	H(10,10) 			= BotRight_Data1m[0];
 	H(10,11) = H(11,10) = BotRight_Data1m[1];
 	H(10,12) = H(12,10) = BotRight_Data1m[2];

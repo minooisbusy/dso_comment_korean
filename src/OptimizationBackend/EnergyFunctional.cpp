@@ -73,10 +73,11 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 
 
 			Vec2f affLL = AffLight::fromToVecExposure(host->ab_exposure, target->ab_exposure, host->aff_g2l_0(), target->aff_g2l_0()).cast<float>();
-			AT(6,6) = -affLL[0];
-			AH(6,6) = affLL[0];
-			AT(7,7) = -1;
-			AH(7,7) = affLL[0];
+			// 여기서 어떻게 부호가 나오고 편미분이 되는지 명확하지 않다.
+			AT(6,6) = -affLL[0]; // ∂a_rel / ∂a_t 에 대한 항으로 보이나, 부호가 반대입니다. 잔차 정의 방식에 따라 달라질 수 있습니다.
+			AT(7,7) = -1;        // ∂b_rel / ∂b_t 에 대한 항으로 보입니다.
+			AH(6,6) = affLL[0];  // ∂a_rel / ∂a_h 에 대한 항으로 보입니다.
+			AH(7,7) = affLL[0];  // ∂b_rel / ∂b_h 에 대한 항으로, 일반적이지 않은 모델을 사용함을 시사합니다.
 
 			AH.block<3,8>(0,0) *= SCALE_XI_TRANS;
 			AH.block<3,8>(3,0) *= SCALE_XI_ROT;
@@ -200,7 +201,7 @@ void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 			// Δx_h: frames[h]->data->get_state_minus_stateZero()
 			// Δx_t: frames[t]->data->get_state_minus_stateZero()
 			// Total derivative를 이용하여 계산 된다. 
-			// 상대적인 변화량..
+			// 상대적인 변화량을 절대적 변화량으로!
 			adHTdeltaF[idx] = frames[h]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adHostF[idx]
 					        +frames[t]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adTargetF[idx];
 		}
@@ -233,7 +234,10 @@ void EnergyFunctional::accumulateAF_MT(MatXX &H, VecX &b, bool MT) // HA_top, bA
 		// accSSE_top_A, &allPoints, this는 미리 바인딩되는 인자이고,
 		// _1, _2, _3, _4는 reduce 함수가 내부적으로 호출할 때 채워주는 placeholder입니다.
 		// 이렇게 생성된 함수 객체는 reduce가 요구하는 시그니처와 일치하게 됩니다.
+		
+		// 각 스레드는 nframes**2개 만큼의 AccumulatorApprox를 `acc`에 초기화 한다.
 		red->reduce(boost::bind(&AccumulatedTopHessianSSE::setZero, accSSE_top_A, nFrames,  _1, _2, _3, _4), 0, 0, 0);
+		// 모든 "활성" 포인트로 잔차를 이용해 H, b를 꾸려간다.
 		red->reduce(boost::bind(&AccumulatedTopHessianSSE::addPointsInternal<0>,
 				accSSE_top_A, &allPoints, this,  _1, _2, _3, _4), 0, allPoints.size(), 50);
 		accSSE_top_A->stitchDoubleMT(red,H,b,this,false,true);
@@ -309,7 +313,7 @@ void EnergyFunctional::resubstituteF_MT(VecX x, CalibHessian* HCalib, bool MT)
 		h->data->step.head<8>() = - x.segment<8>(CPARS+8*h->idx); // fh->step.head<8> 호스트 프레임의 업데이트 스텝 가져옴
 		h->data->step.tail<2>().setZero(); // 광도 파라미터 업데이트는 0으로 만듦
 
-		for(EFFrame* t : frames) // 타겟 프레임, adHostF*dx_host + adTargetF*dx_target
+		for(EFFrame* t : frames) // 지역 상태 -> 전역 상태, adHostF*dx_host + adTargetF*dx_target
 			xAd[nFrames*h->idx + t->idx] = xF.segment<8>(CPARS+8*h->idx).transpose() *   adHostF[h->idx+nFrames*t->idx]
 			            + xF.segment<8>(CPARS+8*t->idx).transpose() * adTargetF[h->idx+nFrames*t->idx];
 	}

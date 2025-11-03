@@ -125,6 +125,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 		centerProjectedTo = Vec3f(Ku, Kv, new_idepth); // 
 
 
+		// d[p2] / d[idepth]
 		// diff d_idepth, 깊이 값에 대해 u,v를 미분한 결과
 		d_d_x = drescale * (PRE_tTll_0[0]-PRE_tTll_0[2]*u)*SCALE_IDEPTH*HCalib->fxl();
 		d_d_y = drescale * (PRE_tTll_0[1]-PRE_tTll_0[2]*v)*SCALE_IDEPTH*HCalib->fyl();
@@ -132,7 +133,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 
 
 
-		// diff calib, intrinsics에 대해 u,v를 미분한 결과
+		// diff calib, d[p2] / d[c]
 		d_C_x[2] = drescale*(PRE_RTll_0(2,0)*u-PRE_RTll_0(0,0));
 		d_C_x[3] = HCalib->fxl() * drescale*(PRE_RTll_0(2,1)*u-PRE_RTll_0(0,1)) * HCalib->fyli();
 		d_C_x[0] = KliP[0]*d_C_x[2];
@@ -155,6 +156,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 		d_C_y[3] = (d_C_y[3]+1)*SCALE_C;
 
 
+		// d[u,v] / d[xi_HT]
 		// "relative" pose twist($\xi_{HT}$)에 대해 u,v 미분 결과
 		// new_depth, u, v는 확실히 target frame에 projection 된 값이다.
 		d_xi_x[0] = new_idepth*HCalib->fxl();
@@ -201,6 +203,7 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 
 	float wJI2_sum = 0;
 
+	// Residual 계산 및 에너지, Jacobian 구성요소 저장
 	for(int idx=0;idx<patternNum;idx++)
 	{
 		float Ku, Kv;
@@ -212,12 +215,11 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 		projectedTo[idx][1] = Kv;
 
 
-        Vec3f hitColor = (getInterpolatedElement33(dIl, Ku, Kv, wG[0]));
-        float residual = hitColor[0] - (float)(affLL[0] * color[idx] + affLL[1]);
+        Vec3f hitColor = (getInterpolatedElement33(dIl, Ku, Kv, wG[0])); // =I2[p2]
+        float residual = hitColor[0] - (float)(affLL[0] * color[idx] + affLL[1]); // r = I2[p2] - a * (I1[p1] + b)
 
 
-		// residual을 파라미터 a로 미분
-		float drdA = (color[idx]-b0); // alpha(host color - beta)가 원본이다.
+		float drdA = (color[idx]-b0); 
 		if(!std::isfinite((float)hitColor[0]))
 		{ state_NewState = ResState::OOB; return state_energy; }
 
@@ -235,25 +237,28 @@ double PointFrameResidual::linearize(CalibHessian* HCalib)
 			if(hw < 1) hw = sqrtf(hw);
 			hw = hw*w;
 
-			hitColor[1]*=hw;
+			hitColor[1]*=hw; // 여기서, w * d[I2] / d[u]를 I2[p2]의 그레디언트 grad[I2]에 넣는다.
 			hitColor[2]*=hw;
 
-			J->resF[idx] = residual*hw;
+			J->resF[idx] = residual*hw; // 
 
-			J->JIdx[0][idx] = hitColor[1];
-			J->JIdx[1][idx] = hitColor[2];
-			J->JabF[0][idx] = drdA*hw;
-			J->JabF[1][idx] = hw;
+			J->JIdx[0][idx] = hitColor[1]; // hw * d[r] / d[u2]
+			J->JIdx[1][idx] = hitColor[2]; // hw * d[r] / d[v2]
+			J->JabF[0][idx] = drdA*hw;     // hw * d[r] / d[a]
+			J->JabF[1][idx] = hw;          // d[r] / d[b]
 
+			// grad[I2]^T @ grad[I2]의 상삼각 행렬 원소 계산
 			JIdxJIdx_00+=hitColor[1]*hitColor[1];
 			JIdxJIdx_11+=hitColor[2]*hitColor[2];
 			JIdxJIdx_10+=hitColor[1]*hitColor[2];
 
+			// J_ab^T @ J_p2
 			JabJIdx_00+= drdA*hw * hitColor[1];
 			JabJIdx_01+= drdA*hw * hitColor[2];
 			JabJIdx_10+= hw * hitColor[1];
 			JabJIdx_11+= hw * hitColor[2];
 
+			// J_ab^T @ J_ab의 상삼각 행렬
 			JabJab_00+= drdA*drdA*hw*hw;
 			JabJab_01+= drdA*hw*hw;
 			JabJab_11+= hw*hw;

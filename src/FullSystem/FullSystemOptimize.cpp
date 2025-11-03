@@ -55,7 +55,7 @@ void FullSystem::linearizeAll_Reductor(bool fixLinearization, std::vector<PointF
 	for(int k=min;k<max;k++)
 	{
 		/******************01. Linearize a residual(factor)*******************/
-		// 모든 잔차 r을 탐색하고 선형화를 수행한다.
+		// 범위 [min,max)에 있는 잔차(=factor) r을 탐색하고 선형화를 수행한다.
 		PointFrameResidual* r = activeResiduals[k]; // fullsystem::optimize()에서 선형화 되지 않은 k번째 잔차 를 가져옴
 		// 모든 에너지 항은 *status[0]에 누적 된다.
 		// 선형화 함수는 최하위 수준의 오차함수의 다양한 Jacobian 계산하고 J에 집어넣는다. 
