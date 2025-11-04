@@ -978,10 +978,11 @@ void FullSystem::deliverTrackedFrame(FrameHessian* fh, bool needKF)
 		if(needKF) needNewKFAfter=fh->shell->trackingRef->id;
 		trackedFrameSignal.notify_all();
 
-		while(coarseTracker_forNewKF->refFrameID == -1 && coarseTracker->refFrameID == -1 )
-		{
-			mappedFrameSignal.wait(lock);
-		}
+		// Mapping 스레드에서 coarseTracker의 참조 프레임이 설정될 때까지 대기합니다.
+		// wait의 predicate는 깨어날 조건(true)을 명시해야 합니다.
+		mappedFrameSignal.wait(lock, [&] {
+			return coarseTracker_forNewKF->refFrameID != -1 || coarseTracker->refFrameID != -1;
+		});
 
 		lock.unlock();
 	}
