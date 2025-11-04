@@ -202,6 +202,7 @@ void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
 			// Δx_t: frames[t]->data->get_state_minus_stateZero()
 			// Total derivative를 이용하여 계산 된다. 
 			// 상대적인 변화량을 절대적 변화량으로!
+			// \Delta\xi_{HT}가 나온다.
 			adHTdeltaF[idx] = frames[h]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adHostF[idx]
 					        +frames[t]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adTargetF[idx];
 		}
@@ -259,6 +260,7 @@ void EnergyFunctional::accumulateLF_MT(MatXX &H, VecX &b, bool MT)
 {
 	if(MT)
 	{
+		// accumulateAF_MT와 같이, `accSSE_top_L`의 `acc`을 NUM_THREAD 갯수 만큼 초기화 한다.
 		red->reduce(boost::bind(&AccumulatedTopHessianSSE::setZero, accSSE_top_L, nFrames,  _1, _2, _3, _4), 0, 0, 0);
 		red->reduce(boost::bind(&AccumulatedTopHessianSSE::addPointsInternal<1>,
 				accSSE_top_L, &allPoints, this,  _1, _2, _3, _4), 0, allPoints.size(), 50);
@@ -860,7 +862,7 @@ void EnergyFunctional::solveSystemF(int iteration, double lambda, CalibHessian* 
 	MatXX HL_top, HA_top, H_sc; // H_linearized, H_active, H_schur_complement
 	VecX  bL_top, bA_top, bM_top, b_sc; // b_active, b_linearized, b_marginalized
 
-	// 1. 활성(Active) 잔차로부터 H_A와 b_A를 누적합니다. (현재 선형화 지점에서의 정보)
+	// 1. 활성(Active) 잔차로부터 H_A와 b_A를 누적한다. (현재 선형화 지점에서의 정보)
 	accumulateAF_MT(HA_top, bA_top,multiThreading);
 
 	// 2. 선형화된(Linearized) 잔차로부터 H_L과 b_L을 누적합니다. (이전 선형화 지점 정보 재사용)

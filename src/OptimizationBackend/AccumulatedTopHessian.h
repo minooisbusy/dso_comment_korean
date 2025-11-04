@@ -110,6 +110,7 @@ public:
 			H = Hs[0];
 			b = bs[0];
 
+			// 각자 값을 다 더한다.
 			for(int i=1;i<NUM_THREADS;i++)
 			{
 				H.noalias() += Hs[i];

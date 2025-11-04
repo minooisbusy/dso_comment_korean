@@ -63,13 +63,14 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 
 	for(EFResidual* r : p->residualsAll)
 	{
+		// 아래에서 `r->isActive()`는 "잔차가 OOB 또는 Outlier 상태여서 최적화 계산에서 제외해야 하는가?"를 의미함
 		// 활성 포인트, 이미 선형화는된 포인트는 추가될 수 없다. 돌아가라.
 		if(mode==0)
 		{
 			if(r->isLinearized || !r->isActive()) continue;
 		}
-		if(mode==1)
-		{
+		if(mode==1) // 선형화 포인트, 선형화 되지 않은 잔차라면 추가될 수 없다. 돌아가라.
+		{			// 즉, `fixLinearizationF()`이 실행된 점들이다!
 			if(!r->isLinearized || !r->isActive()) continue;
 		}
 		if(mode==2)
@@ -88,10 +89,10 @@ void AccumulatedTopHessianSSE::addPoint(EFPoint* p, EnergyFunctional const * con
 
 		VecNRf resApprox; // 계산될 근사 잔차 r(x)를 저장할 변수; 최대 포인트 개수만큼의 크기
 		if(mode==0)
-			resApprox = rJ->resF;
+			resApprox = rJ->resF; // linearize()에서 결정
 		if(mode==2)
-			resApprox = r->res_toZeroF;
-		if(mode==1)
+			resApprox = r->res_toZeroF; // 점을 제거할 때 fixLinearizationF()에서 결정 됨.
+		if(mode==1) // 여기서 결정! Δx가 변하기 때문!
 		{
 			// 4. JΔx 항 계산 (SIMD를 위한 준비 단계) 이들은 J_local을 구성한다.
 			// d[u,v]/d [xi, c, idepth] = d[u,v]/d[xi] * delta[xi] + d[u,v]/d[c] * delta[c] + d[u,v]/d[idepth] * delta[idepth]
@@ -313,21 +314,26 @@ void AccumulatedTopHessianSSE::stitchDoubleInternal(
 
 		for(int tid2=0;tid2 < toAggregate;tid2++)
 		{
-			acc[tid2][aidx].finish();
-			if(acc[tid2][aidx].num==0) continue;
-			accH += acc[tid2][aidx].H.cast<double>();
+			acc[tid2][aidx].finish(); // 13x13 Local Hessian for residuals w.r.t. a point
+			if(acc[tid2][aidx].num==0) continue; // 잔차 누적이 0개이면 넘어가
+			accH += acc[tid2][aidx].H.cast<double>(); // double로 캐스트하여 accH에 더함
 		}
 
+		// Pose top-left
 		H[tid].block<8,8>(hIdx, hIdx).noalias() += EF->adHost[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adHost[aidx].transpose();
 
+		// Pose bottom-right
 		H[tid].block<8,8>(tIdx, tIdx).noalias() += EF->adTarget[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adTarget[aidx].transpose();
 
+		// Pose top-right
 		H[tid].block<8,8>(hIdx, tIdx).noalias() += EF->adHost[aidx] * accH.block<8,8>(CPARS,CPARS) * EF->adTarget[aidx].transpose();
 
+		// block index (1,0)
 		H[tid].block<8,CPARS>(hIdx,0).noalias() += EF->adHost[aidx] * accH.block<8,CPARS>(CPARS,0);
 
 		H[tid].block<8,CPARS>(tIdx,0).noalias() += EF->adTarget[aidx] * accH.block<8,CPARS>(CPARS,0);
 
+		// block index (2, 0)
 		H[tid].topLeftCorner<CPARS,CPARS>().noalias() += accH.block<CPARS,CPARS>(0,0);
 
 		b[tid].segment<8>(hIdx).noalias() += EF->adHost[aidx] * accH.block<8,1>(CPARS,CPARS+8);

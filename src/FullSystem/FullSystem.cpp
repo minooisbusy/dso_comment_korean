@@ -950,7 +950,7 @@ void FullSystem::deliverTrackedFrame(FrameHessian* fh, bool needKF)
 {
 
 
-	if(linearizeOperation)
+	if(linearizeOperation) // 순차 모드! 스레드 안나눔!
 	{
 		if(goStepByStep && lastRefStopID != coarseTracker->refFrameID)
 		{
@@ -971,7 +971,7 @@ void FullSystem::deliverTrackedFrame(FrameHessian* fh, bool needKF)
 		if(needKF) makeKeyFrame(fh); // TODO : List What I have TODO.
 		else makeNonKeyFrame(fh);
 	}
-	else
+	else // 멀티 스레드 모드!
 	{
 		boost::unique_lock<boost::mutex> lock(trackMapSyncMutex);
 		unmappedTrackedFrames.push_back(fh);
@@ -993,11 +993,15 @@ void FullSystem::mappingLoop()
 
 	while(runMapping)
 	{
-		while(unmappedTrackedFrames.size()==0)
-		{
-			trackedFrameSignal.wait(lock);
-			if(!runMapping) return;
-		}
+		//while(unmappedTrackedFrames.size()==0) // spinning loop?! => 아니다 wait() 사용하면 CPU사용 zero
+		//{
+		//	trackedFrameSignal.wait(lock);
+		//	if(!runMapping) return;
+		//}
+		trackedFrameSignal.wait(lock, [&] {
+			return unmappedTrackedFrames.size()>0 || !runMapping;
+		});
+		if(!runMapping) return;
 
 		FrameHessian* fh = unmappedTrackedFrames.front();
 		unmappedTrackedFrames.pop_front();

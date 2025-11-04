@@ -98,7 +98,7 @@ void EFPoint::takeData()
 //의 mode=1일 때 나타난다.
 void EFResidual::fixLinearizationF(EnergyFunctional* ef)
 {
-	Vec8f dp = ef->adHTdeltaF[hostIDX+ef->nFrames*targetIDX];
+	Vec8f dp = ef->adHTdeltaF[hostIDX+ef->nFrames*targetIDX]; //d[xi_HT]
 
 	// compute Jp*delta
 	__m128 Jp_delta_x = _mm_set1_ps(J->Jpdxi[0].dot(dp.head<6>())
@@ -113,15 +113,17 @@ void EFResidual::fixLinearizationF(EnergyFunctional* ef)
 	for(int i=0;i<patternNum;i+=4)
 	{
 		// PATTERN: rtz = resF - [JI*Jp Ja]*delta.
-		__m128 rtz = _mm_load_ps(((float*)&J->resF)+i);
+		__m128 rtz = _mm_load_ps(((float*)&J->resF)+i); // r_0
+
+		// Jr 더하기
 		rtz = _mm_sub_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(J->JIdx))+i),Jp_delta_x));
 		rtz = _mm_sub_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(J->JIdx+1))+i),Jp_delta_y));
 		rtz = _mm_sub_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(J->JabF))+i),delta_a));
 		rtz = _mm_sub_ps(rtz,_mm_mul_ps(_mm_load_ps(((float*)(J->JabF+1))+i),delta_b));
-		_mm_store_ps(((float*)&res_toZeroF)+i, rtz);
+		_mm_store_ps(((float*)&res_toZeroF)+i, rtz); // 최종 결과를 res_toZeroF에 저장. r=r_0+J*dr
 	}
 
-	isLinearized = true;
+	isLinearized = true; // 마 이게 선형화다!
 }
 
 }
