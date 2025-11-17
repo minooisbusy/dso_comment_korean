@@ -895,11 +895,14 @@ void FullSystem::addActiveFrame( ImageAndExposure* image, int id )
 	}
 	else	// do front-end operation.
 	{
-		// =========================== SWAP tracking reference?. =========================
-		if(coarseTracker_forNewKF->refFrameID > coarseTracker->refFrameID)
+		// =========================== SWAP tracking reference. =========================
+		// coarseTracker_forNewKF: mapping thread에서 재장전 된 coarseTracker
+		// coarseTracker: 추적에 사용될 현재 coarseTracker
+		if(coarseTracker_forNewKF->refFrameID > coarseTracker->refFrameID) // mapping thread에서 재장전이 된 경우 (더 최신 참조 프레임)
 		{
 			boost::unique_lock<boost::mutex> crlock(coarseTrackerSwapMutex);
-			CoarseTracker* tmp = coarseTracker; coarseTracker=coarseTracker_forNewKF; coarseTracker_forNewKF=tmp;
+			// coarseTracker와 coarseTracker_forNewKF를 swap.
+			CoarseTracker* tmp = coarseTracker; coarseTracker=coarseTracker_forNewKF; coarseTracker_forNewKF=tmp; // 여기서 스왑하여 장전!
 		}
 
 
@@ -973,24 +976,33 @@ void FullSystem::deliverTrackedFrame(FrameHessian* fh, bool needKF)
 	}
 	else // 멀티 스레드 모드!
 	{
+		// 아래 공유 변수들(unmappedTrackedFrames, needNewKFAfter)을 lock한다.
 		boost::unique_lock<boost::mutex> lock(trackMapSyncMutex);
 		unmappedTrackedFrames.push_back(fh);
-		if(needKF) needNewKFAfter=fh->shell->trackingRef->id;
-		trackedFrameSignal.notify_all();
+		if(needKF) needNewKFAfter=fh->shell->trackingRef->id; // 마지막으로 키프레임을 만든 추적 참조 프레임 ID 설정
+		trackedFrameSignal.notify_all(); // mapping thread를 깨운다.
+
+		//while(coarseTracker_forNewKF->refFrameID == -1 && coarseTracker->refFrameID == -1 )
+		//{
+		//	mappedFrameSignal.wait(lock);
+		//}
 
 		// Mapping 스레드에서 coarseTracker의 참조 프레임이 설정될 때까지 대기합니다.
 		// wait의 predicate는 깨어날 조건(true)을 명시해야 합니다.
+
+		// mapping  thread
+		// makeKeyFrame에서 호출되는 setCoarseTrackingRef에서 호출 된다.
 		mappedFrameSignal.wait(lock, [&] {
 			return coarseTracker_forNewKF->refFrameID != -1 || coarseTracker->refFrameID != -1;
 		});
 
-		lock.unlock();
+		lock.unlock(); // 굳이 필요한가? => 스레드 대기 시간을 줄인다.
 	}
 }
 
 void FullSystem::mappingLoop()
 {
-	boost::unique_lock<boost::mutex> lock(trackMapSyncMutex);
+	boost::unique_lock<boost::mutex> lock(trackMapSyncMutex); // 생성과 동시에 lock!
 
 	while(runMapping)
 	{
@@ -1005,10 +1017,12 @@ void FullSystem::mappingLoop()
 		if(!runMapping) return;
 
 		FrameHessian* fh = unmappedTrackedFrames.front();
-		unmappedTrackedFrames.pop_front();
+		unmappedTrackedFrames.pop_front(); // N - 1
 
 
 		// guaranteed to make a KF for the very first two tracked frames.
+		// 즉, 전체 프레임에서 두 개 이하의 키프레임이 존재하면,
+		// 해당 프레임을 무조건 키프레임으로 만든다.
 		if(allKeyFramesHistory.size() <= 2)
 		{
 			lock.unlock();
@@ -1018,33 +1032,43 @@ void FullSystem::mappingLoop()
 			continue;
 		}
 
-		if(unmappedTrackedFrames.size() > 3)
-			needToKetchupMapping=true;
+		if(unmappedTrackedFrames.size() > 3) // N - 1 > 3
+			needToKetchupMapping=true; // 매핑 되지 않은 프임임이 세 개 이상 남아있으면, 따라잡기(ketchup) 플래그 활성화
 
 
-		if(unmappedTrackedFrames.size() > 0) // if there are other frames to tracke, do that first.
+		// (앞에서 pop_front()를 했음에도) 아직 매핑되지 않은 추적 프레임이 남아있다면,
+		// 해당 프레임을 비키프레임으로 처리한다.
+		if(unmappedTrackedFrames.size() > 0)
 		{
 			lock.unlock();
 			makeNonKeyFrame(fh);
 			lock.lock();
 
+			// 만약 따라잡기 플래그가 활성화 되어있고( N - 1 > 3인 상황), 아직 매핑되지 않은 추적 프레임이 남아있다면,
 			if(needToKetchupMapping && unmappedTrackedFrames.size() > 0)
 			{
 				FrameHessian* fh = unmappedTrackedFrames.front();
 				unmappedTrackedFrames.pop_front();
 				{
+					// shellPoseMutex 잠금
 					boost::unique_lock<boost::mutex> crlock(shellPoseMutex);
+					// 추적 참조 프레임이 유효한지 확인
 					assert(fh->shell->trackingRef != 0);
+					// 현재 프레임의 카메라 위치를 추적 참조 프레임과의 상대 변환을 통해 계산
 					fh->shell->camToWorld = fh->shell->trackingRef->camToWorld * fh->shell->camToTrackingRef;
+					// 선형화 지점 설정
 					fh->setEvalPT_scaled(fh->shell->camToWorld.inverse(),fh->shell->aff_g2l);
 				}
-				delete fh;
-			}
+				delete fh; // 폐기
+			} // 이후 루프가 다음 unmappedTrackedFrames를 처리함
 
 		}
-		else
+		else // 매핑되지 않은 추적 프레임이 더 이상 없다면,
 		{
-			if(setting_realTimeMaxKF || needNewKFAfter >= frameHessians.back()->shell->id)
+			// 마지막 참조 키프레임 아이디가 프레임 윈도우 내에 가장 최근의 키프레임 아이디보다 크거나 같다면,
+			// 즉, 마지막 키프레임 이후로 새로운 키프레임이 만들어지지 않았다면,
+			// 새로운 키프레임을 만든다.
+			if(setting_realTimeMaxKF /* = false */ || needNewKFAfter >= frameHessians.back()->shell->id)
 			{
 				lock.unlock();
 				makeKeyFrame(fh);
@@ -1058,6 +1082,7 @@ void FullSystem::mappingLoop()
 				lock.lock();
 			}
 		}
+		// 트래킹 스레드에 매핑이 완료되었음을 알림
 		mappedFrameSignal.notify_all();
 	}
 	printf("MAPPING FINISHED!\n");
@@ -1192,6 +1217,7 @@ void FullSystem::makeKeyFrame( FrameHessian* fh)
 
 
 	{
+		// 
 		boost::unique_lock<boost::mutex> crlock(coarseTrackerSwapMutex);
 		coarseTracker_forNewKF->makeK(&Hcalib);
 		coarseTracker_forNewKF->setCoarseTrackingRef(frameHessians); // idepthmap, aff_g2l 초기화

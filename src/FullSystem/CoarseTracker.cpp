@@ -530,12 +530,12 @@ void CoarseTracker::setCoarseTrackingRef(
 		std::vector<FrameHessian*> frameHessians)
 {
 	assert(frameHessians.size()>0);
-	lastRef = frameHessians.back();
+	lastRef = frameHessians.back(); // 이후 추적의 참조 프레임이 된다. 주 된 목적 1
 	makeCoarseDepthL0(frameHessians); // 투영 된 포인트의 역깊이를 다양한 방식으로 가중합
 
 
 
-	refFrameID = lastRef->shell->id;
+	refFrameID = lastRef->shell->id; // 주 된 목적2
 	lastRef_aff_g2l = lastRef->aff_g2l(); // 광도 파라미터 초기화, 이전 값으로.
 
 	firstCoarseRMSE=-1;

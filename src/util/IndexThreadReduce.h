@@ -214,7 +214,7 @@ private:
 				isDone[idx] = true;
 				//printf("worker %d waiting..\n", idx);
 				done_signal.notify_all();
-				todo_signal.wait(lock);
+				todo_signal.wait(lock); // worker는 따로 조건 없이 notify_all() 등이 발생해야 꺠어난다.
 			}
 		}
 	}
